@@ -1,0 +1,13 @@
+#.Rproj.user
+#.Rhistory
+#.RData
+#.Ruserdata
+
+#Ignore everything
+*
+
+#Except these
+!.gitignore
+!TF_Harmony/
+!TF_Harmony/app_working_backup.R
+!TF_Harmony/www/
