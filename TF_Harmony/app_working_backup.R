@@ -4,6 +4,7 @@ library(gprofiler2)
 library(DT)
 library(shiny)
 library(plotly)
+library(motifStack)
 library(ggraph)
 library(igraph)
 library(tidygraph)
@@ -13,7 +14,7 @@ library(viridis)
 library(ggdendro)
 library(dendextend)
 library(universalmotif)
-library(motifStack)
+library(Cairo)
 library(shinycssloaders)
 library(phylogram)
 library(seqinr)
@@ -21,8 +22,6 @@ library(ape)
 
 
 reactiveConsole(TRUE)
-#dt <- fread("~/Desktop/github/HTT_144TFs/dt_for_Bingran.tsv")
-#dt <- fread("synergytable.tsv")
 
 
 ### Make narpv from degs: ###
@@ -61,7 +60,7 @@ setkey(dt, TF2)
 dt <- dt[tfswithfamilies[, .(Name, TF2_Family = Family)]]
 
 pwms <- readRDS("Data/pwms.RDS")
-names(pwms) <- sub(".*?_", "", names(pwms))
+#names(pwms) <- sub(".*?_", "", names(pwms))
 pfms <- convert_motifs(pwms, class = "motifStack-pfm")
 
 #narpv <- fread("nar_agg_no-batch_wTED.tsv")
@@ -83,6 +82,7 @@ setkey(jitr, GeneID)
 
 jits <- fread("Data/JITGenes_shoot.csv", skip = 1, select = c("AtID", "FDR adjusted p-value", "First Response (Just-in-time bin)"), col.names = c("GeneID", "pvalue", "JIT"))
 setkey(jits, GeneID)
+
 
 #idoptions <- dt[, unique(sub("AT.*?_", "", V1))]
 #idoptions <- sub("_DES...*.csv", "", list.files("./DEGS", pattern = "^A.*"))
@@ -180,7 +180,7 @@ ui <- navbarPage("Landscape of TF Harmony",
                                 selectInput(
                                   inputId = "tanglechoice1", 
                                   label = "Left side:", 
-                                  choices = c("Concordant", "Discordant", "Phylogeny", "Motif similarity"),
+                                  choices = c("Concordant", "Discordant", "Phylogeny", "Up Motif similarity", "Down Motif similarity"),
                                   selected = "Concordant", 
                                   multiple = F
                                   
@@ -188,7 +188,7 @@ ui <- navbarPage("Landscape of TF Harmony",
                                 selectInput(
                                   inputId = "tanglechoice2", 
                                   label = "Right side:", 
-                                  choices = c("Concordant", "Discordant", "Phylogeny", "Motif similarity"),
+                                  choices = c("Concordant", "Discordant", "Phylogeny", "Up Motif similarity", "Down Motif similarity"),
                                   selected = "Discordant", 
                                   multiple = F
                                 ),
@@ -220,12 +220,12 @@ ui <- navbarPage("Landscape of TF Harmony",
                                 outputId = "motifdend", height = 1000
                               )%>% withSpinner()
                               ),
-                     tabPanel("Browse Motifs",
-                              plotOutput(
-                                outputId = "motifbrowser",
-                                height = 1000
-                              ) %>% withSpinner()
-                              )
+                     # tabPanel("Browse Motifs",
+                     #          plotOutput(
+                     #            outputId = "motifbrowser",
+                     #            height = 1000
+                     #          ) %>% withSpinner()
+                     #          )
                               
                    )
           ),
@@ -255,7 +255,7 @@ ui <- navbarPage("Landscape of TF Harmony",
                        ),
                        checkboxInput(inputId = "harmonyinterfacet", label = "Facet by interaction:", value = T),
                      ),
-                   tabsetPanel(
+                   tabsetPanel(id = "pairwise",
                    tabPanel("TF x TF",
                    
                    splitLayout(
@@ -265,10 +265,10 @@ ui <- navbarPage("Landscape of TF Harmony",
 
                    
           ),
-          tabPanel("Motif Comparison",
+          tabPanel("Motif Comparison", value = "pairwisemotifs",
                    selectInput("motiftreestyle", label = "Tree Style:", choices = c("stack", "tree", "radialPhylog"), multiple = F),
                    #uiOutput(outputId = "tfmotif"),
-                   plotOutput(
+                   imageOutput(
                      outputId = "motifplot", 
                      width = "80%", 
                      height = 800
@@ -557,16 +557,49 @@ server <- function(input, output, session) {
   # conftest <- reactive({ftestfun(concordantshared(), Tar1(), Tar2())})
   # disftest <- reactive({ftestfun(discordantshared(), Tar1(), Tar2())})
   
-
-
-
-  output$motifplot <- renderPlot({
-    subpfms <- pfms[names(pfms) %in% input$TFs]
-    motifStack(subpfms, layout = input$motiftreestyle)
-  })
+  trigger_motif_redraw <- reactiveVal(0)
   
+  observeEvent(input$tabs, {
+    if (input$tabs == "pairwise") {
+      trigger_motif_redraw(trigger_motif_redraw() + 1)
+    }
+  })
+
+  # shinyjs::delay(50, {
+  output$motifplot <- renderImage({
+    req(input$pairwise == "pairwisemotifs")
+    
+    pattern <- paste0("^(", paste0(input$TFs, collapse = "|"), ")_")
+    
+    subpfms <- pfms[grepl(pattern, names(pfms))]
+    
+    grid::grid.newpage()
+    #subpfms <- pfms[sub("_.*", "", names(pfms)) %in% input$TFs]
+    tryCatch({
+      
+      outfile <- tempfile(fileext = ".png")
+      
+      svg(outfile, width = 10, height = 5)
+      motifStack(subpfms, layout = input$motiftreestyle)
+      dev.off()
+      list(src = outfile,
+           contentType = 'image/svg+xml',
+           width = "100%",  # SVG scales naturally
+           height = "auto",
+           alt = "Motif stack plot")
+    
+       
+    }, error = function(e) {
+      print(paste("Motif plot error:", e$message))
+    })
+    
+  }, deleteFile = TRUE)
+  # })
   output$motifbrowser <- renderPlot({
-    subpfms <- pfms[names(pfms) %in% colnames(motifmat())]
+    pattern <- paste0("^(", paste0(input$TFs, collapse = "|"), ")_")
+    
+    subpfms <- pfms[grepl(pattern, colnames(motifmat()))]
+    #subpfms <- pfms[names(pfms) %in% colnames(motifmat())]
     #phylog <- ade4::hclust2phylog(motifhclust())
     #browseMotifs(subpfms, phylog = phylog)
     motifStack(subpfms, reorder = F)
@@ -1404,7 +1437,7 @@ server <- function(input, output, session) {
   
   
   output$tanglegram <- renderPlot({
-    choices <- c("Concordant", "Discordant", "Phylogeny", "Motif similarity")
+    choices <- c("Concordant", "Discordant", "Phylogeny", "Up Motif similarity", "Down Motif similarity")
     
     
     my_alignment_sequence <- msa::msaConvert(htmsa, type="seqinr::alignment")
@@ -1415,27 +1448,61 @@ server <- function(input, output, session) {
     
     subids <- idoptions[!(idoptions %in% selids)]
 
-    motifhclust <- motifhclust()
-    motifhclust$labels <- as.character(motifhclust$labels)
+    motifupclust <- motifupclust()
+    motifupclust$labels <- sub("_up", "", motifupclust$labels)
+    motifupclust$labels <- as.character(motifupclust$labels)
+    
+    motifdownclust <- motifdownclust()
+    motifdownclust$labels <- sub("_down", "", motifdownclust$labels)
+    motifdownclust$labels <- as.character(motifdownclust$labels)
     
     if (length(subids) > 0) {
       ph <- phylogram::prune(ph, pattern = subids)
     } 
     
-    dd <- dendlist(as.dendrogram(conhclustx()), as.dendrogram(dishclustx()), ph, as.dendrogram(motifhclust))
+    dd <- dendlist(as.dendrogram(conhclustx()), as.dendrogram(dishclustx()), ph, as.dendrogram(motifupclust), as.dendrogram(motifdownclust))
     
     tanglegram(dd, sub = paste(input$tanglechoice1, "x", input$tanglechoice2), k_branches = input$kbreaks, k_labels = input$kbreaks, sort = T, which = c(which(choices == input$tanglechoice1), which(choices == input$tanglechoice2)))
   })
   
   motifmat <- reactive({
-    subids <- subdt()[, TF1]
-    subpwms <- pwms[names(pwms) %in% subids]
+    subids <- unique(subdt()[, TF1])
+    # pattern <- paste0("^(", paste0(subids, collapse = "|"), ")_")
+    # 
+    # subpwms <- pwms[grepl(pattern, names(pwms))]
+    
+    #subpwms <- pwms[names(pwms) %in% subids]
+    # subids is your vector of TF names like "ABF2", "ZAT7", etc.
+
+    matches <- unlist(lapply(subids, function(tf) {
+      which(startsWith(names(pwms), paste0(tf, "_")))
+    }))
+    
+    subpwms <- pwms[unique(matches)]
+
     motifmat <- compare_motifs(subpwms, method = input$motifcompmethod)
   })
   
   motifhclust <- reactive({
     motifdist <- dist(motifmat(), method = input$distmeth)
     motifhclust <- hclust(motifdist, method = input$clustmeth)
+  })
+  
+  motifupclust <- reactive({
+    keep <- grep("_up", rownames(motifmat()), value = TRUE)
+    
+    submat <- motifmat()[keep, keep]
+    motifdist <- dist(submat, method = input$distmeth)
+    motifupclust <- hclust(motifdist, method = input$clustmeth)
+  })
+  
+  motifdownclust <- reactive({
+    keep <- grep("_down", rownames(motifmat()), value = TRUE)
+    #message("subnames: ", keep)
+    submat <- motifmat()[keep, keep]
+    
+    motifdist <- dist(submat, method = input$distmeth)
+    motifdownclust <- hclust(motifdist, method = input$clustmeth)
   })
   
   output$motifheatmap <- renderPlotly({
