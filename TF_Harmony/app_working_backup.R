@@ -68,6 +68,10 @@ narpv <- fread("Data/newnarpv_nebs_nobatch.tsv")
 narpv[, Color := ifelse(sign(log2FoldChange) < 0, "Blue", "Red")]
 narpv[TF == "HSF.A4A", TF_ID := "AT4G18880"]
 
+exp17nogo <- narpv[EXP == "1-17", unique(TF)]
+
+narpv <- narpv[EXP != "1-17"]
+
 allgeneids <- unique(narpv$rn)
 
 gis <- narpv[, .(unique(rn))]
@@ -83,6 +87,8 @@ setkey(jitr, GeneID)
 jits <- fread("Data/JITGenes_shoot.csv", skip = 1, select = c("AtID", "FDR adjusted p-value", "First Response (Just-in-time bin)"), col.names = c("GeneID", "pvalue", "JIT"))
 setkey(jits, GeneID)
 
+dt <- dt[!(TF1 %in% exp17nogo)]
+dt <- dt[!(TF2 %in% exp17nogo)]
 
 #idoptions <- dt[, unique(sub("AT.*?_", "", V1))]
 #idoptions <- sub("_DES...*.csv", "", list.files("./DEGS", pattern = "^A.*"))
@@ -153,17 +159,19 @@ ui <- navbarPage("Landscape of TF Harmony",
                    tabsetPanel(
                      
                      tabPanel("Harmony Heatmap",
-                              splitLayout(
+                              tabsetPanel(
+                                tabPanel("Concordant Harmony",
                               plotlyOutput(
                                 outputId = "conHarmonyHeatmap",
                                 
                                 height = 2000
-                              ) %>% withSpinner(), 
+                              ) %>% withSpinner(), ),
+                              tabPanel("Discordant Harmony",
                               plotlyOutput(
                                 outputId = "disHarmonyHeatmap",
                                 
                                 height = 2000
-                              )%>% withSpinner() 
+                              )%>% withSpinner(),) 
                               ),
                      ),
                      tabPanel("Family Harmony", 
@@ -524,7 +532,7 @@ motifloader <- function(fn){
 }
 
 # Define server logic required to draw a histogram
-server <- function(input, output, session) {
+  server <- function(input, output, session) {
   
   Tar1 <- reactive({findfile(input$TF1)})
   Tar2 <- reactive({findfile(input$TF2)})
@@ -1198,6 +1206,31 @@ server <- function(input, output, session) {
       #conorderx <- conhclustx$labels[conhclustx$order]
     })
     
+    conhclusty <- reactive({
+      subdtcon <- dt[(((TF1_Family %in% input$family1) & (TF2_Family %in% input$family1)) | ((TF1 %in% input$family1) & (TF2 %in% input$family1))), .(TF1, TF2, Concordant_Intersect, Concordant_PValue, Concordant_Harmony, TF1_Family, TF2_Family)]
+      
+      subdtcon <- subdtcon[!(is.na(Concordant_Harmony))][
+        (abs(Concordant_Harmony) > as.numeric(input$familyharmonycutoff))][
+          Concordant_Intersect > as.numeric(input$familyintersectcutoff)][
+            Concordant_PValue < as.numeric(input$familypvcutoff)][
+              !(is.infinite(Concordant_Harmony))
+            ]
+      
+      
+      subdtconwdt <- dcast.data.table(subdtcon[, .(TF1, TF2, Concordant_Harmony)], TF1 ~ TF2, value.var = "Concordant_Harmony", fill = 0)
+      
+      conmat <- as.matrix(subdtconwdt, rownames = "TF1")
+      
+      
+      
+      condtmy <- dist(t(conmat), method = input$distmeth)
+      
+      #condtmy <- dist(t(conmat))
+      #disdtmy <- dist(t(dismat))
+      
+      conhclusty <- hclust(condtmy, method = input$clustmeth)
+    })
+    
     dishclustx <- reactive({
 
       subdtdis <- subdt()[, .(TF1, TF2, Discordant_Intersect, Discordant_PValue, Discordant_Harmony)]
@@ -1229,6 +1262,36 @@ server <- function(input, output, session) {
       
     })
     
+    dishclusty <- reactive({
+      
+      subdtdis <- subdt()[, .(TF1, TF2, Discordant_Intersect, Discordant_PValue, Discordant_Harmony)]
+      
+      
+      
+      subdtdis <- subdtdis[!(is.na(Discordant_Harmony)) & (abs(Discordant_Harmony) > as.numeric(input$familyharmonycutoff))][
+        Discordant_Intersect > as.numeric(input$familyintersectcutoff)][
+          Discordant_PValue < as.numeric(input$familypvcutoff)][
+            !(is.infinite(Discordant_Harmony))
+          ]
+      
+      subdtdiswdt <- dcast.data.table(subdtdis[, .(TF1, TF2, Discordant_Harmony)], TF1 ~ TF2, value.var = "Discordant_Harmony", fill = 0)
+      
+      dismat <- as.matrix(subdtdiswdt, rownames = "TF1")
+      
+      
+      
+      disdtmy <- dist(t(dismat), method = input$distmeth)
+      
+      #condtmy <- dist(t(conmat))
+      #disdtmy <- dist(t(dismat))
+      
+      dishclusty <- hclust(disdtmy, method = input$clustmeth)
+      
+      #conhclusty <- hclust(condtmy)
+      #dishclusty <- hclust(disdtmy)
+      
+      
+    })
     
     
     output$conHarmonyHeatmap <- renderPlotly({
@@ -1246,8 +1309,9 @@ server <- function(input, output, session) {
       
 
    
-      conorder <- conhclustx()$labels[conhclustx()$order]
-      
+      conorderx <- conhclustx()$labels[conhclustx()$order]
+      conordery <- conhclusty()$labels[conhclusty()$order]
+      #conordery <- conhclustx()$labels[conhclust]
       
       # allcols <- viridis(length(input$family1))
       # names(allcols) <- unique(input$family1)
@@ -1259,8 +1323,8 @@ server <- function(input, output, session) {
       
       #print(length(conorder) == length(unique(c(subdtcon$TF1, subdtcon$TF2))))
       
-       subdtcon$TF1 <- factor(subdtcon$TF1, levels = conorder)
-       subdtcon$TF2 <- factor(subdtcon$TF2, levels = conorder)
+       subdtcon$TF1 <- factor(subdtcon$TF1, levels = conorderx)
+       subdtcon$TF2 <- factor(subdtcon$TF2, levels = conordery)
        setkey(subdtcon, TF1)
        #print(head(subdtcon$TF1))
        
@@ -1298,7 +1362,7 @@ server <- function(input, output, session) {
 
         scale_fill_viridis_c(option = "a") +
         
-        geom_abline(slope = 1, intercept = 0) + 
+        #geom_abline(slope = 1, intercept = 0) + 
         
         ggtitle("Concordant Harmony")
       
@@ -1316,10 +1380,11 @@ server <- function(input, output, session) {
           ]
       
       
-      disorder <- dishclustx()$labels[dishclustx()$order]
+      disorderx <- dishclustx()$labels[dishclustx()$order]
+      disordery <- dishclusty()$labels[dishclusty()$order]
       
-      subdtdis$TF1 <- factor(subdtdis$TF1, levels = disorder)
-      subdtdis$TF2 <- factor(subdtdis$TF2, levels = disorder)
+      subdtdis$TF1 <- factor(subdtdis$TF1, levels = disorderx)
+      subdtdis$TF2 <- factor(subdtdis$TF2, levels = disordery)
       setkey(subdtdis, TF1)
       
       hm2 <- ggplot() + 
@@ -1354,7 +1419,7 @@ server <- function(input, output, session) {
 
         scale_fill_viridis_c(option = "e") +
 
-        geom_abline(slope = 1, intercept = 0) +
+        #geom_abline(slope = 1, intercept = 0) +
         
         labs(title = "Discordant Harmony")
         
