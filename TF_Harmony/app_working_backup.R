@@ -32,74 +32,108 @@ reactiveConsole(TRUE)
 # degs <- merge.data.table(degs, allteds, by.x = "TF_ID", by.y = "Locus", all.x = T)
 # fwrite(degs, "newnarpv_nebs_nobatch.tsv", sep = "\t")
 #####
+
+## Initial data read-in and setup ##
+
+## spinner while graphs load
 options(spinner.type = 5, spinner.color = "darkblue")
 
+## setting up color scheme that is used in a couple of the network graphs - specifically the one that overlays
+## the known activator/repressor data with TF activity
 testcolors <- c("red", "gray", "blue", "gray", "darkred", "darkblue")
 names(testcolors) <- c("Activator", "Minimally Active", "Repressor", "Unknown", "Upregulated", "Downregulated")
 
+## This msa is used for the protein sequence dendrogram - needs to be redone to reflect phytozome
 htmsa <- Biostrings::readAAMultipleAlignment("Data/msa.fa")
 
+## These are the known transcription effector domains, used in combination with the color scheme for network graphs 
 allteds <- fread("Data/allteds.tsv")
 
+
+## Reading in the pre-calculated harmony - commented out is an older version, current version is 'no batch' and from the neb data **
 #dt <- fread("harmonytable_justnobatch.tsv")
 dt <- fread("Data/harmonytable_nobatch_nebs.tsv")
 
 # Rename columns - only for nobatch_nebs.tsv
 setnames(dt, c("TF", "Intersect_Concordant", "Intersect_Discordant", "PValue_Concordant", "PValue_Discordant", "Correlation_Concordant", "Correlation_Discordant", "Harmony_Concordant", "Harmony_Discordant"), c("TF1", "Concordant_Intersect", "Discordant_Intersect", "Concordant_PValue", "Discordant_PValue", "Concordant_Correlation", "Discordant_Correlation", "Concordant_Harmony", "Discordant_Harmony"))
 
-
+## Harmony is calculated directionally - so each TF is 'TF1' and compared against all others, meaning I need to remove rows
+## TF1 is the same as TF2
 dt <- dt[!(TF1 == TF2)]
+## Cleaning up the TF names - these two steps can be done ahead of time to decrease intial load time
 dt[, TF1 := sub("-.*", "", TF1)]
 dt[, TF2 := sub("-.*", "", TF2)]
+
+## Reading in the data table that associates TF IDs with TF families - which will then be merged later on
+## can also be done ahead of time
 tfswithfamilies <- fread("Data/tfidswithfamilies.tsv")
 
+## Merging the harmony datatable with the family data - ie. giving TF1 and TF2 family ids
 setkey(dt, TF1)
 setkey(tfswithfamilies, Name)
 dt <- dt[tfswithfamilies[, .(Name, TF1_Family = Family)]]
 setkey(dt, TF2)
 dt <- dt[tfswithfamilies[, .(Name, TF2_Family = Family)]]
 
+
+## Reading in PWMs for motif sorting
 pwms <- readRDS("Data/pwms.RDS")
 #names(pwms) <- sub(".*?_", "", names(pwms))
+## Converting pwms to a different format that one of the motif packages needed
 pfms <- convert_motifs(pwms, class = "motifStack-pfm")
 
 #narpv <- fread("nar_agg_no-batch_wTED.tsv")
+
+## This should be all the DEGs for each tf in narrow format - no idea if its faster to read something with a lot of rows or a lot of columns, this could be sped up. 
 narpv <- fread("Data/newnarpv_nebs_nobatch.tsv")
+## adding a column for colorscheme for network graphs to reference
 narpv[, Color := ifelse(sign(log2FoldChange) < 0, "Blue", "Red")]
+## I swear this TF is named something different in every dataset. 
 narpv[TF == "HSF.A4A", TF_ID := "AT4G18880"]
 
+## Experiment 17 was eventually deemed to not pass QC, so removing those tf/targets. 
 exp17nogo <- narpv[EXP == "1-17", unique(TF)]
-
 narpv <- narpv[EXP != "1-17"]
 
+## Creating a set of unique gene ids from the DEGs list, used for a selectable list later. 
 allgeneids <- unique(narpv$rn)
 
+## Again - pre-setup for network graphs, determining the overall set of vertices
 gis <- narpv[, .(unique(rn))]
 vertices <- merge(gis, allteds, by.x = "V1", by.y = "Locus", all.x = T)
 vertices <- merge(vertices, unique(narpv[, .(TF_ID, TF)]), by.x = "V1", by.y = "TF_ID", all.x = T)
 #vertices[!(is.na(TF)), V1 := TF]
 
+## Reading in a dataset of gene expression by root cell type from the Benfey lab - I suspect this will be removed before publication
 cte <- fread("Data/cellTypeExpression.tsv", key = "Gene ID")
+
+## Similarly - reading in just-in-time dataset for roots
 jitr <- fread("Data/JITGenes_root.csv", skip = 1, select = c("Gene", "FDR adjusted p-value", "First Response (Just-in-time bin)"), col.names = c("GeneID", "pvalue", "JIT"))
 setkey(jitr, GeneID)
 
-
+## Reading in just-in-time dataset for shoots
 jits <- fread("Data/JITGenes_shoot.csv", skip = 1, select = c("AtID", "FDR adjusted p-value", "First Response (Just-in-time bin)"), col.names = c("GeneID", "pvalue", "JIT"))
 setkey(jits, GeneID)
 
+## Removing experiment 17 from harmony data
 dt <- dt[!(TF1 %in% exp17nogo)]
 dt <- dt[!(TF2 %in% exp17nogo)]
 
 #idoptions <- dt[, unique(sub("AT.*?_", "", V1))]
 #idoptions <- sub("_DES...*.csv", "", list.files("./DEGS", pattern = "^A.*"))
 
+
+## ok so the orginal form of this app called DEGs individually instead of reading them all in at once - which is still being done in the 
+## pairwise section I believe. So I have a folder with individual degs, and a large dataset with a narrow form of degs. This should be consolidated. Below is reading in the list individual TFs based on the files in the DEG folder. 
 ### modified when nobatch nebs were added because they were TSVs instead
 idoptions <- sub("_DES...*.tsv", "", list.files("Data/DEGS", pattern = "^A.*"))
-
 ids <- as.data.table(idoptions)
 ids[, c("Ids", "TF") := tstrsplit(idoptions, "_")]
 idoptions <- sub("^A.*?_", "", idoptions)
 idoptions <- narpv[order(TF), unique(TF)]
+
+## This is a version of the harmony table, but with fewer columns. 
+## This is used to show Pairwise Harmony but just between the selected TFs as opposed to the raw data under Global Analyses
 newdt <-
   dt[, .(
     TF1 = sub("AT.*?_", "", TF1),
@@ -108,45 +142,61 @@ newdt <-
     Discordant = Discordant_Harmony
   )][order(-Concordant)]
 
+## Reading in a list of all Arabidopsis TF IDs - so that all TFs can be identified by a triangle in the network graphs
 fulltfids <- fread("Data/all_ath_tf_ids.tsv")
 
+## and more pre-setup for network graphs
 vertices <- merge(vertices, fulltfids, by.x = "V1", by.y = "Gene_ID", all.x = T)
 vertices[!(is.na(Family)), shape := "triangle"]
 vertices[(is.na(Family)), shape := "circle"]
 vertices[!(is.na(TF)), shape := "triangle"]
 #vertices[!(is.na(TF)), V1 := TF]
 vertices <- unique(vertices)
+
+
 # Define UI for application that draws a histogram
 ui <- navbarPage("Landscape of TF Harmony",
-                 
+
+                 ## This is all the UI setup. Generally hiarchical starting with the top three panels: 
+                 ## Global Analyses, Pairwise Analyses, and Target Regulation
+                 ## Then each of those panels has sub panels and figures. 
                  
           tabPanel("Global Analyses",
 
                      inputPanel(
-                       
+                       ## Defining cutoffs for harmony figures - user can set harmony minimums, pvalues, intersects etc
+                       ## and the harmony table is subset based on these input
                        textInput(inputId = "familyharmonycutoff", label = "Harmony Minimum:", value = 0),
                        textInput(inputId = "familypvcutoff", label = "Fisher P-Value Maximum:", value = 0.05),
                        textInput(inputId = "familyintersectcutoff", label = "Intersect Minimum:", value = 0),
                        
                      selectInput(
+                       ## User can define what type of distance calculation is used prior to clustering
                        inputId = "distmeth", 
                        label = "Distance Method", choices = c("euclidean", "maximum", "manhattan", "canberra"),
                        selected = "maximum", 
                        multiple = F
                      ),
                      selectInput(
+                       ## User can define the clustering method used - this is all for the heatmaps
                        inputId = "clustmeth", 
                        label = "Clustering Method", 
                        choices = c("complete", "average", "ward.D", "single", "mcquitty", "median", "centroid", "ward.D2"),
                        selected = "ward.D2", 
                        multiple = F
                      ),
+                     ## Similary user can define what type of algorithm is used for motif comparison
+                     ## These are just options from the motif package
+                     ## again this may be removed at a later point, I'm not sure how many people have strong opinions on 
+                     ## motif clustering algorithms. 
                      selectInput(inputId = "motifcompmethod", label = "Motif Comparison Method:", choices = c("PCC", "EUCL", "SW", "KL", "ALLR", "BHAT", "HELL", "SEUCL", "MAN", "ALLR_LL", "WEUCL", "WPCC"), selected = "ALLR_LL", multiple = F, selectize = F)
                      
                    
                      
                    ),
                    selectInput(
+                     ## the main input on the front page - asking the used which TF or Family to subset by
+                     ## Starts pre-populated with all TF Families listed
                      inputId = "family1", 
                      label = "Search by TF or TF Family:", 
                      choices = unique(c(tfswithfamilies$Family, idoptions)),
@@ -157,8 +207,10 @@ ui <- navbarPage("Landscape of TF Harmony",
                    ),
                    
                    tabsetPanel(
-                     
+                     ## getting into the visuals below the user input options
+                     ## Series of tabs under Global Analyses
                      tabPanel("Harmony Heatmap",
+                              ## Main visual you see on load - concordant harmony heatmap, interactive plotly
                               tabsetPanel(
                                 tabPanel("Concordant Harmony",
                               plotlyOutput(
@@ -166,7 +218,9 @@ ui <- navbarPage("Landscape of TF Harmony",
                                 
                                 height = 2000
                               ) %>% withSpinner(), ),
+                              
                               tabPanel("Discordant Harmony",
+                              ## Alternative to main heatmap - show discordant harmony instead, interactive plotly
                               plotlyOutput(
                                 outputId = "disHarmonyHeatmap",
                                 
@@ -175,6 +229,10 @@ ui <- navbarPage("Landscape of TF Harmony",
                               ),
                      ),
                      tabPanel("Family Harmony", 
+                              ## Second tab under Global Analyses
+                              ## Graphs look at prevalence of family interaction
+                              ## Honestly these didn't see all that effective to me
+                              ## They'll likely be removed
                               splitLayout(
                                 plotlyOutput( outputId= "relationships", 
                                               height = 1000) %>% withSpinner(),
@@ -184,6 +242,12 @@ ui <- navbarPage("Landscape of TF Harmony",
                               ),
                      ),
                      tabPanel("Tanglegram",
+                              ## Third tab under Global Analyses
+                              ## allows the user to select their inputs and compare dendrograms - highlighting similarities
+                              ## Concordant / Discordant are harmony dendrograms
+                              ## Phylogeny is a pre-computed MSA that is trimmed based on used selections
+                              ## Motif similarity is calculated on-the-fly I believe based on pre-computed PWMs which are 
+                              ## filtered based on user input (ie. only bZIPs)
                               inputPanel(
                                 selectInput(
                                   inputId = "tanglechoice1", 
@@ -201,6 +265,7 @@ ui <- navbarPage("Landscape of TF Harmony",
                                   multiple = F
                                 ),
                                 selectInput(
+                                  ## user input that allows to you highlight breaks
                                   inputId = "kbreaks",
                                   label = "Number of breaks:",
                                   choices = c(0,1,2,3,4,5,6,7,8,9),
@@ -208,22 +273,29 @@ ui <- navbarPage("Landscape of TF Harmony",
                                   multiple = F
                                 )
                               ), 
+                              ## tanglegram plot output based on above selections
                               plotOutput(outputId = "tanglegram", height = 1000) %>% withSpinner()
 
                               
 
                      ),
                      tabPanel("Harmony Table", 
+                              ## raw harmony table for user to peruse and interact with
+                              ## still under global analyses
                                 DT::dataTableOutput(outputId = "fullharmonydt")
                               ),
                      
                      tabPanel("Motif Heatmap",
-                            
+                            ## heatmap of motif similarity
+                            ## changes based on user selection of motif comparison algorithm
                               plotlyOutput(
                                 outputId = "motifheatmap", height = 1000
                                 )%>% withSpinner()
                               ),
                      tabPanel("Motif Dendrogram",
+                              ## shows the *actual* motifs allowing you to actually see how similar they are
+                              ## downside is that it takes forever to load if you try to show All the motifs at once
+                              ## should probably be limited to like 5 tfs at a time or so
                               plotlyOutput(
                                 outputId = "motifdend", height = 1000
                               )%>% withSpinner()
@@ -239,8 +311,11 @@ ui <- navbarPage("Landscape of TF Harmony",
           ),
           
           tabPanel("Pairwise Analyses",
-                   
+                   ## Done with Global analyses, this is the middle panel up at the top
+                   ## Defines all the TF x TF comparisons in more detail
                      inputPanel(
+                       ## User input for selecting which tfs they want to compare
+                       ## Based on which DEG files are available to read in individually
                        selectizeInput(
                          inputId = "TFs",
                          label = "TFs",
@@ -249,9 +324,10 @@ ui <- navbarPage("Landscape of TF Harmony",
                          selected = idoptions[1:2],
                          options = list(maxItems = 10)
                        ), 
+                       ## The idea here is that you can read in a list of TFs from your own project and see their defined harmony
                        fileInput(inputId = "tfupload", label = "Upload list of TFs"),
 
-                       
+                       ## Users can adjust size of pairwise harmony plot
                        sliderInput(
                          inputId = "harmonyplotheight",
                          min = 500,
@@ -261,11 +337,15 @@ ui <- navbarPage("Landscape of TF Harmony",
                          label = "Plot height:"
 
                        ),
+                       ## users can decide if they want separate pairwise plots for each combination of TF (faceted) or 
+                       ## one plot with all the pairwise combinations shown in different colors
                        checkboxInput(inputId = "harmonyinterfacet", label = "Facet by interaction:", value = T),
                      ),
                    tabsetPanel(id = "pairwise",
                    tabPanel("TF x TF",
-                   
+                   ## First pairwise plot
+                   ## Shows all shared DEGs, direction of regulation, and correlation of Log2FC, computed on the fly
+                   ## On-the-fly was picked so that users can upload their own DEG datasets and compare to ours
                    splitLayout(
                         plotlyOutput(outputId = "harmonyplotly", height = "100%") %>% withSpinner(),
                         DT::dataTableOutput("harmonyTable")
@@ -273,6 +353,8 @@ ui <- navbarPage("Landscape of TF Harmony",
 
                    
           ),
+          ## More motif comparisons, but this time pairwise
+          ## Idea being that you can see if a lot of shared regulation is associated with a similar motif
           tabPanel("Motif Comparison", value = "pairwisemotifs",
                    selectInput("motiftreestyle", label = "Tree Style:", choices = c("stack", "tree", "radialPhylog"), multiple = F),
                    #uiOutput(outputId = "tfmotif"),
@@ -284,12 +366,16 @@ ui <- navbarPage("Landscape of TF Harmony",
                    
                    
           ),
+          ## Are the shared DEGs expressed in a specific root cell type at baseline? 
+          ## Overlay of Benfey cell type data subsetted to match shared DEGs
           tabPanel("Cell Type Specificity",
                    plotlyOutput(
                      outputId = "ctplot",  
                      height = 1000
                    )
           ),
+          ## Are the shared DEGs differentially expressed at a given time period in the NxTime datasets? 
+          ## Overlay of NxTime data - subsetted to match shared DEGs
           tabPanel("NxTime Overlay", 
                    splitLayout(
                      cellWidths = c("50%", "50%"), 
@@ -303,6 +389,8 @@ ui <- navbarPage("Landscape of TF Harmony",
                      )
                    )
           ), 
+          ## On the fly calculation of GO Terms using the GOST server
+          ## Subsetted DEGs are submitted to the server at time of selection - runs even when page isn't selected
           tabPanel("GO Terms",
                    sliderInput(inputId = "goplotheight", min = 500, max = 10000, step = 100, value = 1000, label = "Plot height:"),
                    splitLayout(
@@ -319,6 +407,10 @@ ui <- navbarPage("Landscape of TF Harmony",
                    )
                    
           ),
+          
+          ## Do the TFs also regulate one another, or do they just share DEGs
+          ## I can't remember if the color scheme was correct on this one, might need updating
+          ## Users can adjust the style of the network graph shown
           tabPanel("TF Regulation",
                    inputPanel(
                    sliderInput(
@@ -352,18 +444,24 @@ ui <- navbarPage("Landscape of TF Harmony",
                      selected = "layout_with_sugiyama",
                      multiple = F
                    ),
-                   
+                   ## Are we subsetting to on shared DEGs? ** TODO - check and see what this subsets? 
                    checkboxInput(
                      inputId = "networkdegs", 
                      label = "DEGs only:", 
                      value = TRUE
                      ), 
                    ),
+            ## vis Network plot
             visNetworkOutput(
               outputId = "networkplot", 
               height = 1000
               )%>% withSpinner()
           ), 
+          
+          ## Separate panel showing overlapping DEGs between TFs - harmony excluded
+          ## Idea here was whether we could see if we could identify the primary TF in cascading networks
+          ## Degree cutoff is to limit to targets that are downstream of a minimum number of TFs
+          ## ie. only keep a target is all 3 of my selected TFs regulate it
           tabPanel("DEG Networks",
                    inputPanel(
                      textInput(inputId = "tfregpcutoff", label = "Adjusted P-value Cutoff:", value = "0.05"),
@@ -398,7 +496,11 @@ ui <- navbarPage("Landscape of TF Harmony",
                    )%>% withSpinner()
             
           ),),),
-          
+          ## Final overarching panel - Target Regulation
+          ## This is the reverse of the prevous two panels. 
+          ## Instead of looking at which targets a TF regulates we start with the targets and look at all TFs that regulate it. 
+          ## You can also upload a list of targets (ie. DEGs from your own experiment) and see all the TFs
+          ## that regulate those targets. 
           tabPanel("Target Regulation",
                    inputPanel(
                      fileInput(inputId = "targetupload", label = "Upload list of Targets"),
@@ -426,6 +528,8 @@ ui <- navbarPage("Landscape of TF Harmony",
                        multiple = F
                      )
                    ),
+                   
+                   ## This is where the list of all targets from NarPV is used
                    selectInput(
                      inputId = "allgenes",
                      label = "Targets: ",
@@ -445,14 +549,22 @@ ui <- navbarPage("Landscape of TF Harmony",
                    DT::DTOutput(outputId = "targetregdt", height = 500, width = "50%")
                    )
                    ),
+                   
+          ## I had to include this after adding some packages - never figured out which. 
+          ## I added the spinner, and motif, and tanglegram packages all around the same time
+          ## Then when I got everything up and working all the basic formatting had changed
+          ## I tried experimenting and removing individual packages at a time but couldn't determine the culprit
+          ## So did a work around where I just redefined the basics 
           includeCSS("~/Desktop/github/HTT_144TFs/TF_Harmony/www/style.css")
 
           )
           
         )
         
+## Defining a handful of functions between the frontend and backend sections. 
 
-
+## This is the Fisher Test function. You provide the number of shared targets, and then two 
+## sets of targets, it sets up the contingency table and runs the fisher exact test.
 ftestfun <- function(shared, Tar1, Tar2){
   totalgenes <- 32031
   inNewOnly <- nrow(Tar1) - shared
@@ -470,6 +582,13 @@ ftestfun <- function(shared, Tar1, Tar2){
   return(test)
 }
 
+
+## Function to return a linked list based on a given pattern (pat)
+## Subsets NarPV - the DEGs data based on the pattern
+## Only grabs rows where the padj is less than 0.05 - grabs the AtID (rn), Log2FC, and padj. 
+## Names this list based on the pattern
+## For loop cycles through a series of TF ids - so all targets for multiple tfs will be returned in a named list
+## if old TF ids are still present (oldll) it doesn't recalculate them
 findfile <- function(pat, oldll = list()){
   lllength <- length(pat) + length(oldll)
   
@@ -489,6 +608,8 @@ findfile <- function(pat, oldll = list()){
   return(ll)
 }
 
+## Given multiple differential-expression result tables, compare every pair by merging on gene id, then tag each gene as 
+## concordant/discordant in direction of effect, caching previous pair computations if provided.
 
 matchtidy <- function(Tar1, oldmatch = data.table()){
   #matched <- Reduce(function(...) merge.data.table(..., by = "rn", suffixes = paste0("_", names(Tar1))), Tar1)
@@ -519,6 +640,9 @@ matchtidy <- function(Tar1, oldmatch = data.table()){
   return(matched)
 }
 
+
+## I played with several different ways of displaying the pairwise motifs
+## Can't remember if this is still used... 
 motifloader <- function(fn){
   return(tags$figure(
     class = "motif", 
@@ -531,12 +655,18 @@ motifloader <- function(fn){
   ))
 }
 
-# Define server logic required to draw a histogram
+# Define server logic 
+## Backend computation
   server <- function(input, output, session) {
   
-  Tar1 <- reactive({findfile(input$TF1)})
-  Tar2 <- reactive({findfile(input$TF2)})
+  ## DEG datasets for TF1 & TF2 from pairwise analysis
+  ## This was the original design when I only allowed two tfs... 
+  #Tar1 <- reactive({findfile(input$TF1)})
+  #Tar2 <- reactive({findfile(input$TF2)})
   
+  ## Above should have been replaced with the ability to call multiple tfs. So now its a selectize input limited to TF ids
+  ## findfile was refactored to use the for loop and cycle through for as many tfs as needed. 
+  ## Uses NarPV to calculate overlapping DEGs on the fly.   
   #print(input$TFs)
   tarfs <- reactive({
     if (exists("tarfs()")) findfile(input$TFs, tarfs())
@@ -547,13 +677,15 @@ motifloader <- function(fn){
     else matchtidy(tarfs())
     })
   
+  ## Restricts Harmony to only use the input TFs
+  ## Uses newdt - the harmony data with fewer columns 
   subgraph <- reactive({
     #newdt[(TF1 == input$TF1 | TF2 == input$TF2 | TF1 == input$TF2 | TF2 == input$TF1) & !(is.na(Concordant) & is.na(Discordant))]
     newdt[(TF1 %in% input$TFs)][TF2 %in% input$TFs]#[!(is.na(Concordant) & is.na(Discordant))]
     })
   
   
-  
+  ## The total number of shared DEGs 
   shared <- nrow(matched())
   
   # concordantshared <- reactive({nrow(matched()[Harmony == "Concordant"])})
@@ -565,6 +697,9 @@ motifloader <- function(fn){
   # conftest <- reactive({ftestfun(concordantshared(), Tar1(), Tar2())})
   # disftest <- reactive({ftestfun(discordantshared(), Tar1(), Tar2())})
   
+  
+  ## So sometimes the motifs don't show, added this to try to force a 'redraw' 
+  ## every time you click the pairwise tab
   trigger_motif_redraw <- reactiveVal(0)
   
   observeEvent(input$tabs, {
@@ -573,6 +708,12 @@ motifloader <- function(fn){
     }
   })
 
+  
+  ## This is the motif plot from Pairwise Analysis
+  ## Subsets the pfms dataset and then grabs the pre-existing PNG file and displays it 
+  ## Users can select what type of visual - tree vs stack vs no dendrogram
+  ## So it compares motifs based on pfms and then renders images from pre-computed motifs
+  
   # shinyjs::delay(50, {
   output$motifplot <- renderImage({
     req(input$pairwise == "pairwisemotifs")
@@ -603,6 +744,12 @@ motifloader <- function(fn){
     
   }, deleteFile = TRUE)
   # })
+  
+  ## Another motif browser - but this one is under Global Harmony
+  ## Instead of loading pre-computed images it subsets the pfms based on user input
+  ## and then generates a motif on the fly
+  ## In the latest version the tab panel has been commented out - so this shouldn't be called
+  
   output$motifbrowser <- renderPlot({
     pattern <- paste0("^(", paste0(input$TFs, collapse = "|"), ")_")
     
@@ -615,6 +762,10 @@ motifloader <- function(fn){
     # motif_tree(subpwms, layout = "rectangular")
   })
   
+  
+  ## Showing subset harmony table in an interactive DataTable with scroll bars
+  ## This is under *pairwise harmony*
+  ## Only shows harmony for subsetted TF list based on user input
     output$harmonyTable <- DT::renderDataTable(
       {
         setDT(subgraph())
@@ -627,6 +778,9 @@ motifloader <- function(fn){
       )
     )  
     
+    ## Reactive function to subset harmony data on Global Analyses based on user input
+    ## Most future Global Analysis harmony references use subdt**
+    ## Subsetted in such a way that you can specify TF or TF Family
     subdt <- reactive({
       subdt <-
         dt[(((TF1_Family %in% input$family1) &
@@ -647,6 +801,9 @@ motifloader <- function(fn){
              )][order(-Concordant_Harmony)]
     })
     
+    ## Showing subset harmony table in an interactive DataTable with scroll bars
+    ## This is under Global Analyses harmony
+    ## Only shows harmony for subsetted TF list based on user input
     output$fullharmonydt <- DT::renderDataTable(
       {
         
@@ -659,6 +816,12 @@ motifloader <- function(fn){
         
       )
     )  
+    
+    ## This is the cell type specificity plot under Pairwise Analyses
+    ## Subsets the cell type data to the shared DEGs from the TFs specified by the user
+    ## Calculates mean cell type expression and scales it
+    ## Then creates a matrix of the data, calculates distance, and then clusters
+    ## then generates a ggplot that I wrap in ggplotly for interactivity 
     
     output$ctplot <- renderPlotly({
       subcte <- cte[`Gene ID` %in% matched()$rn]
@@ -691,6 +854,11 @@ motifloader <- function(fn){
       ggplotly(hm)
     })
     
+    
+    ## NxTime overlap plot from Pairwise Analyses - Root data
+    ## Subsets NxTime based on shared DEGs
+    ## No clustering - instead it orders based Just-In-Time category
+    
     output$nxtplot1 <- renderPlotly({
       subjitr <- jitr[GeneID %in% matched()$rn]
       
@@ -710,6 +878,7 @@ motifloader <- function(fn){
       ggplotly(hm)
     })
     
+    ## Same thing as nxtplot1 except its doing it for Shoot data now
     output$nxtplot2 <- renderPlotly({
       subjits <- jits[GeneID %in% matched()$rn]
       
@@ -729,24 +898,38 @@ motifloader <- function(fn){
       ggplotly(hs)
     })
     
+    ## GO Term submission
+    ## Pulls out shared DEG ids then submits them to GOST server
+    ## from g:Profiler package https://biit.cs.ut.ee/gprofiler/gost
     goout <- reactive({
       targs <- split(matched()$rn, f = matched()$Inter)
       gost(targs, organism = "athaliana", multi_query = T)
     })
     
+    
+    ## Rendering plot output of GO terms
     output$goplot <- renderPlotly({
       
       ggplotly(gostplot(goout(), interactive = F), height = input$goplotheight)
       
     })
     
+    ## Rendering GO term table from output
+    ## Needs fixing - table does not scroll and long tables extend beyond the screen
+    ## Likely - gosttable will need to be parsed independently and repackaged into a DataTable
     output$gotable <- renderPlot({
       #print(head(goout()))
       publish_gosttable(goout(), ggplot = T)
     })
     
+    ## Telling the app to submit the GO terms in the background to decrease lag time
     outputOptions(output, "goplot", suspendWhenHidden = FALSE)
     
+    
+    ## User input - list of TFs to upload
+    ## App watches for tfs then reads in the data
+    ## Then updates the selectInput "TFs" based on the new data
+    ## Pairwise Analyses
     observeEvent(input$tfupload, {
       file <- input$tfupload
       fdt <- fread(file$datapath, header = F)
@@ -758,6 +941,10 @@ motifloader <- function(fn){
         selected = fdt[V1 %in% idoptions, V1]
       )
     })
+    
+    ## User option to upload a list of targets
+    ## Target regulation
+    ## Updates selectInput to match upload
     observeEvent(input$targetupload, {
       file <- input$targetupload
       fdt <- fread(file$datapath, header = F)
@@ -769,6 +956,8 @@ motifloader <- function(fn){
         selected = fdt[V1 %in% allgeneids, V1]
       )
     })
+    
+    
     # 
     # observeEvent(input$harmonyTable_rows_selected, {
     #   updateSelectInput(
@@ -779,8 +968,13 @@ motifloader <- function(fn){
     #   )
     # })
     
+    
+    ## I don't remember if this is still used - it was needed because the harmony table would change when the user selected certain rows
+    ## I think I removed that feature
     proxy <- dataTableProxy(outputId = "harmonyTable")
     
+    ## For the harmony cutoff user input
+    ## The slider is updated automatically to use the table minimum and maximum as the extreme values
     observeEvent(input$TFs, {
       meltdt <- melt.data.table(subgraph())
       meltdt <- meltdt[!(is.na(value) | is.infinite(value))]
@@ -788,21 +982,32 @@ motifloader <- function(fn){
       updateSliderInput(session, inputId = "HarmonyRange", value = 0, min = 0, max = max(abs(meltdt$value)))
     })
     
-    observeEvent(input$TF2, {
-      meltdt <- melt.data.table(subgraph())
-      meltdt <- meltdt[!(is.na(value) | is.infinite(value))]
-      proxy %>% selectRows(newdt[TF1 == input$TF1 & TF2 == input$TF2, which = T],)
-      updateSliderInput(session, inputId = "HarmonyRange", value = 0, min = 0, max = max(meltdt$value))
-    })
+    ## Same thing as above but for TF2 now... actually now that I think of it 
+    ## this probably isn't in use anymore either when I switched over to the multi-tf input... 
+    ## going to try commenting it out to see what happens
+    # observeEvent(input$TF2, {
+    #   meltdt <- melt.data.table(subgraph())
+    #   meltdt <- meltdt[!(is.na(value) | is.infinite(value))]
+    #   proxy %>% selectRows(newdt[TF1 == input$TF1 & TF2 == input$TF2, which = T],)
+    #   updateSliderInput(session, inputId = "HarmonyRange", value = 0, min = 0, max = max(meltdt$value))
+    # })
     
+    
+    ## This should be the DEG Network plot from Pairwise Analyses
+    ## Shows all the overlapping degs
     output$tfnetworkplot <- renderVisNetwork({
+      
+      ## Getting input from the user
       padjcutoff <- as.numeric(input$tfregpcutoff)
       l2fccutoff <- as.numeric(input$tfreglfccutoff)
       degreecutoff <- as.numeric(input$tfdegreecutoff)
       
+      ## Subsetting DEGs to match user cutoffs
       subnar <- narpv[TF %in% input$TFs][padj < padjcutoff][abs(log2FoldChange) > l2fccutoff]
       
-      
+      ## Cleaning up the datatable - adding labels based on directionality
+      ## Removing self referential rows - no need to show TF over expression here
+      ## ordering based activity/color/log2foldchange
       subnar[, group := ifelse(sign(log2FoldChange) == 1, "Upregulated", "Downregulated")]
       subnar <- subnar[!(TF_ID == rn)]
       subnar <- subnar[order(-Activity, Color, log2FoldChange)]
@@ -810,25 +1015,28 @@ motifloader <- function(fn){
       
       #print(head(subnar))
       
+      ## Creating the graph data structure from the DEG subset
       mygraph <- graph_from_data_frame(
         d = subnar[, .(TF_ID, rn, label = TF, value = log2FoldChange, padj, group)], 
         vertices = unique(vertices[(V1 %in% subnar$TF) | (V1 %in% subnar$rn) | (V1 %in% subnar$TF_ID), .(V1, label = TF, group = Activity, value = TedStrength, shape = shape)])
         )
       
       
-      
+      ## Calculating network degree
       V(mygraph)$Degree <- igraph::degree(mygraph)
-      
+      ## Pruning the network to only show vertices above the user cutoff for degree minimum
       mygraph <- delete.vertices(mygraph, V(mygraph)$Degree < degreecutoff)
       
       #V(mygraph)$group <- ifelse(names(V(mygraph)) %in% narpv$TF, narpv[TF %in% names(V(mygraph)),  Activity], "Unknown")
       #V(mygraph)$value <- ifelse(names(V(mygraph)) %in% narpv$TF, narpv[TF %in% names(V(mygraph)),  TedStrength], 0)
       
+      ## Setting the colors based on the color scheme established in the setup sectin - before UI
       V(mygraph)$color <- testcolors[V(mygraph)$group]
       E(mygraph)$color <- testcolors[E(mygraph)$group]
       
       #print(head(mygraph))
       
+      ## Showing the network graph and defining a handful of options
       visIgraph(mygraph, layout = input$degnetworkstyle) %>% 
         visOptions(highlightNearest = list(enabled = T, degree = 1, hover = T), collapse = T ) %>% 
         visNodes(color = list(border = "black", highlight = "yellow")) %>%
@@ -842,13 +1050,21 @@ motifloader <- function(fn){
         
     })
     
-  
+    ## This is a different network graph showing harmony - TF Regulation tab under Pairwise Analyses
+    ## Generates a network graph from subgraph - which is the subsetted harmony datatable
+    ## The graph itself shows concordant vs. discordant harmony by colored arrows assuming there is significant harmony between two tfs
+    
     output$networkplot <- renderVisNetwork({
-      
+      ## Melting datatable, subsetting, adding color labels
       melted <- melt.data.table(subgraph(), variable.name = "group")
       melted <- melted[!(is.na(value) | is.infinite(value)) & abs(value) > input$HarmonyRange ]
       melted[, color := ifelse(group == "Concordant", "red", "blue")]
       
+      
+      ## Checks to see if DEGs is checked
+      ## Grabs all the TF2s -> TFs that have harmony with TF1 from the melted datatable
+      ## Goes through all the TFs in the input and double filters - must be a TF and must be an AtID in tarffs
+      ## Then subsets melted to only be the tfs in tf2ids
       if (input$networkdegs){
         
         tf2tfs <- melted$TF2
@@ -865,89 +1081,28 @@ motifloader <- function(fn){
       }
       
       
-      
+      ## Creating graph data structure, ensuring it's directional to match harmony 
       mygraph <- as_tbl_graph(as.data.table(melted), directed = T)
-      
+      ## calculating network degree
       V(mygraph)$Degree <- igraph::degree(mygraph)
       
-      #print(mygraph)
-      
+      ## Displaying the network graph
       visIgraph(mygraph, layout = input$tfregnetworkstyle) %>% 
         visOptions(highlightNearest = list(enabled = T, degree = 1, hover = T), collapse = T, width = "100%") %>%
         #visEdges(arrows = "to" ) %>%
         visNodes(color = list(border = "black", highlight = "yellow")) %>%
         visGroups(groupname = "Concordant", color = "red") %>%
-        
         visGroups(groupname = "Discordant", color = "blue") %>%
-        
-     
         visLegend() 
       
-      
-      # ggraph(mygraph, "dendrogram", circular = T) + 
-      #   geom_conn_bundle(data = get_con(from = from, to = to), alpha = 0.1) 
-      
-     # ggraph(mygraph, "stress") +
-     # 
-     #    geom_edge_parallel2(
-     #      aes(
-     #        color = variable,
-     #        fill = variable,
-     #        width = abs(value),
-     #      ),
-     #      arrow = arrow(
-     #        #angle = ifelse(sign(log2FC) == 1, 30, 90),
-     #        type = "closed"
-     #      ),
-     #      
-     #      start_cap = circle(5, 'mm'),
-     #      end_cap = circle(5, 'mm'),
-     #      #alpha = 0.6,
-     #      strength = 0.2
-     #    ) +
-     #    # geom_edge_density(
-     #    #   aes(fill = variable)
-     #    # )+
-     #    geom_node_text(
-     #      aes(label = name),
-     #      size = 10,
-     #      repel = T,
-     #      #nudge_x = -0.1
-     #    ) +
-     # 
-     #    geom_node_point(
-     #      aes(size = Degree)
-     #    ) +
-     # 
-     #    theme_void(base_size = 20) +
-     # 
-     #    theme(
-     #    #  legend.position = "left",
-     #      legend.position = "bottom",
-     #      legend.direction = "vertical",
-     # 
-     #    ) +
-     #    # 
-     #    # scale_edge_alpha(range = c(0.3,1)) +  
-     #    # 
-     #    scale_edge_width(range = c(1, 7)) +
-     #    # 
-     #    scale_edge_color_manual(
-     #      values = viridis::viridis(2, end = 0.75, direction = -1) #,
-     #      #breaks = c("Negative", "Positive")
-     #    ) #+
-     #    # 
-     #    # labs(
-     #    #   width = "Harmony Strength",
-     #    #   size = "Degree Connectivity",
-     #    #   color = "\nHarmony Direction"
-     #    # )  
-      
-      # simpleNetwork(
-      #   melted,
-      #   zoom = T
-      #   )
     })
+    
+    ## This is the harmony graph on the first page of Pairwise Analyses
+    ## creates a ggplot comparing log2FC for shared DEGs between two TFs
+    ## points are colored by whether the two TFs agree on up/down regulation of shared TF
+    ## plot is wrapped by Plotly for interactivity
+    ## Pre-computed correlation exists but isn't displayed - had trouble making it work with Plotly 
+    ## Linear modeling is added via geom_smooth
     
     output$harmonyplotly <- renderPlotly({
       setDT(matched())
@@ -978,6 +1133,12 @@ motifloader <- function(fn){
        ggplotly(p, height = input$harmonyplotheight)
     })
     
+    ## This is the second tab under Global Analyses
+    ## Family Harmony
+    ## The idea was to show harmony relationships but color coded by family to look for patterns
+    ## starts by subsetting the harmony datatable based on user tf family inputs
+    ## removes rows with NA harmony and subsets further based on user cutoffs
+    ## 
     
     output$relationships <- renderPlotly({
       subdt <- dt[(((TF1_Family %in% input$family1) & (TF2_Family %in% input$family1)) | ((TF1 %in% input$family1) & (TF2 %in% input$family1))), .(TF1, TF2, Concordant_Harmony, Discordant_Harmony, TF1_Family, TF2_Family)]
@@ -990,8 +1151,15 @@ motifloader <- function(fn){
       #     Discordant_PValue < as.numeric(input$familypvcutoff)][
       #       !(is.infinite(Discordant_Harmony))
       #     ]
+      
+      ## Defining a new column called interaction which is used to color the points
+      ## This is a unique identifier for which families are interacting 
+      ## this step is used so TF1-MYB <-> TF2-bZIP is treated the same as TF1-bZIP <-> TF2-MYB 
       subdt[, Interaction := paste(pmin(TF1_Family, TF2_Family), pmax(TF1_Family, TF2_Family), sep = ".")]
       
+      ## Scatter plot of Harmony values - discordant shown as negatives
+      ## colored by family interaction
+      ## Text overlay in plotly of the TF ids
       p <- ggplot(subdt, 
                   aes(
                     x = Concordant_Harmony, 
@@ -1005,6 +1173,12 @@ motifloader <- function(fn){
       ggplotly(p)
     })
     
+    ## Network graph calculating proportionality of one family interacting with another family
+    ## Starts with subsetting and user cutoffs
+    ## Calculates the mean concordant/discordant harmony of one family with another
+    ## Sums the total harmony by family
+    ## Then divides the mean by the total to calculate proportion for each family interaction
+    ## Then starts creating the graph structure, manually defining edges and ensuring they're directional
     output$familyproportion <- renderVisNetwork({
       subdt <- dt[(((TF1_Family %in% input$family1) &
                       (TF2_Family %in% input$family1)
@@ -1101,81 +1275,17 @@ motifloader <- function(fn){
         visPhysics(enabled = FALSE)  # Respect igraph layout
       
       
-      # # Create edges for Concordant Harmony
-      # edges_concordant <- family_harmony[mean_H_concordant > 0.5, .(
-      #   from = TF1_Family,
-      #   to = TF2_Family,
-      #   value = mean_H_concordant * 10,
-      #   title = paste0("Concordant Harmony: ", round(mean_H_concordant, 3)),
-      #   color = "blue",
-      #   arrows = "to"
-      # )]
-      # 
-      # 
-      # # Create edges for Discordant Harmony (reverse direction)
-      # edges_discordant <- family_harmony[mean_H_discordant > 0.5, .(
-      #   from = TF2_Family,  # Reverse direction
-      #   to = TF1_Family,
-      #   value = mean_H_discordant * 10,
-      #   title = paste0("Discordant Harmony: ", round(mean_H_discordant, 3)),
-      #   color = "red",
-      #   arrows = "to"
-      # )]
-      # 
-      # # Combine edges
-      # edges <- rbind(edges_concordant, edges_discordant)
-      # 
-      # 
-      # 
-      # 
-      # # Prepare nodes
-      # nodes <- unique(c(edges$from, edges$to))
-      # nodes <- data.table(id = nodes, label = nodes)
-      # 
-      # 
-      # 
-      # tryCatch({
-      # visNetwork(nodes, edges) %>%
-      #   visEdges(smooth = TRUE) %>%  # smoother layout for overlapping edges
-      #   visNodes(shape = "dot", size = 25) %>%
-      #   visHierarchicalLayout(direction = "LR", sortMethod = "directed") %>%
-      #   #visLayout(randomSeed = 42) %>%
-      #   visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
-      #   visPhysics(stabilization = TRUE) #%>%
-      #   #visInteraction(navigationButtons = TRUE) %>%
-      #   # visLegend(addEdges = list(
-      #   #   list(label = "Concordant Harmony", color = "blue"),
-      #   #   list(label = "Discordant Harmony", color = "red")
-      #   # ))
-      # }, error = function(e){
-      #   message("Error rendering visNetwork:")
-      #   message(e)
-      #   return(NULL)
-      # }
-      # )
       
-      # # Prepare edges (only show those above a threshold to reduce clutter)
-      # edges <- family_harmony[prop_H_concordant > 0.01, .(
-      #   from = TF1_Family,
-      #   to = TF2_Family,
-      #   value = prop_H_concordant * 10,  # scale for visualization
-      #   title = paste0("Harmony: ", round(prop_H_concordant, 3))
-      # )]
-      # 
-      # # Create unique node list from both `from` and `to`
-      # nodes <- unique(c(edges$from, edges$to))
-      # nodes <- data.table(id = nodes, label = nodes)
-      # 
-      # visNetwork(nodes, edges) %>%
-      #   visEdges(arrows = "to", smooth = FALSE) %>%
-      #   visNodes(shape = "dot", size = 20) %>%
-      #   visLayout(randomSeed = 42) %>%
-      #   visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
-      #   visPhysics(stabilization = TRUE) %>%
-      #   visInteraction(navigationButtons = TRUE) %>%
-      #   visLegend()
     })
     
+    ## Reactive object to manually calculate harmony clustering 
+    ## This is the concordant clustering
+    ## Used a few times under Global Analyses tab
+    ## Subsets harmony data
+    ## Converts to wide format, then changes to a matrix
+    ## Calculates distances - based on user algorithm
+    ## Then clusters - based on user algorithm
+    ## This is done separately for both X and Y axes as harmony is directional
     conhclustx <- reactive({
       subdtcon <- dt[(((TF1_Family %in% input$family1) & (TF2_Family %in% input$family1)) | ((TF1 %in% input$family1) & (TF2 %in% input$family1))), .(TF1, TF2, Concordant_Intersect, Concordant_PValue, Concordant_Harmony, TF1_Family, TF2_Family)]
 
@@ -1206,6 +1316,9 @@ motifloader <- function(fn){
       #conorderx <- conhclustx$labels[conhclustx$order]
     })
     
+    
+    ## Reactive object to calculate clustering order for Y axis concordant harmony
+    ## Global Analyses
     conhclusty <- reactive({
       subdtcon <- dt[(((TF1_Family %in% input$family1) & (TF2_Family %in% input$family1)) | ((TF1 %in% input$family1) & (TF2 %in% input$family1))), .(TF1, TF2, Concordant_Intersect, Concordant_PValue, Concordant_Harmony, TF1_Family, TF2_Family)]
       
@@ -1231,6 +1344,10 @@ motifloader <- function(fn){
       conhclusty <- hclust(condtmy, method = input$clustmeth)
     })
     
+    
+    ## Reactive object to calculate discordant harmony clustering for the x axis
+    ## And yes - clustering should be refactored to it's own function to speed things up
+    ## Global Analyses
     dishclustx <- reactive({
 
       subdtdis <- subdt()[, .(TF1, TF2, Discordant_Intersect, Discordant_PValue, Discordant_Harmony)]
@@ -1262,6 +1379,9 @@ motifloader <- function(fn){
       
     })
     
+    
+    ## reactive object to calculate discordant harmony clustering for the y axis
+    ## Global Analyses
     dishclusty <- reactive({
       
       subdtdis <- subdt()[, .(TF1, TF2, Discordant_Intersect, Discordant_PValue, Discordant_Harmony)]
@@ -1293,7 +1413,12 @@ motifloader <- function(fn){
       
     })
     
-    
+    ## This is the harmony heatmap on the first tab of Global Analyses
+    ## Clustering is done is separate reactive objects
+    ## Done as a ggplot so that I can make it interactive with Plotly
+    ## Harmony is first subsetted and filtered based on user input
+    ## Then ordered based on clustered object
+    ## Then displayed as a raster graph
     output$conHarmonyHeatmap <- renderPlotly({
       
       subdtcon <- subdt()[, .(TF1, TF2, Concordant_Intersect, Concordant_PValue, Concordant_Harmony, TF1_Family, TF2_Family)]
@@ -1370,6 +1495,11 @@ motifloader <- function(fn){
       
     })
      
+    
+    ## Same this as previous graph but for discordant harmony
+    ## Heatmap of discordant harmony under Global Analyses
+    ## Clustering calculated in separate reactive object
+    ## Done as ggplot to allow interactivity with Plotly
     output$disHarmonyHeatmap <- renderPlotly({
       subdtdis <- subdt()[, .(TF1, TF2, Discordant_Intersect, Discordant_PValue, Discordant_Harmony)]
       
@@ -1427,6 +1557,10 @@ motifloader <- function(fn){
      ggplotly(hm2)
       })
     
+    
+  ## Creating the tanglegram for concordant harmony vs. motifs
+    ## Uses cluster object, and then creates dendrogram for each
+     
   output$conmotifTanglegram <- renderPlot(
     {
       motifhclust <- motifhclust()
@@ -1436,6 +1570,11 @@ motifloader <- function(fn){
       tanglegram(dd, sub = "Concordant x Motifs", k_branches = 5, k_labels = 5, sort = T)
       }
     )
+  
+  ## Creating tanglegram for protein sequence alignment vs. concordant harmony
+  ## uses precomputed msa 
+  ## calculates dendrogram for msa 
+  ## prunes dendrogram based on user inputs
   
   output$phyloconTanglegram <- renderPlot(
     {
@@ -1461,6 +1600,9 @@ motifloader <- function(fn){
       tanglegram(dd, sub = "Concordant x Phylogeny", k_branches = 5, k_labels = 5, sort = T)
     }
   )
+  
+  ## Creating tanglegram for protein sequence vs discordant phylogeny
+  ## Not sure why motifhclust is called here.... need to look into this
   output$phylodisTanglegram <- renderPlot(
     {
       my_alignment_sequence <- msa::msaConvert(htmsa, type="seqinr::alignment")
@@ -1486,6 +1628,7 @@ motifloader <- function(fn){
     }
   )
   
+  ## Creating tanglegram for motifs vs. discordant harmony
   output$dismotifTanglegram <- renderPlot({
     motifhclust <- motifhclust()
     motifhclust$labels <- as.character(motifhclust$labels)
@@ -1494,13 +1637,17 @@ motifloader <- function(fn){
     tanglegram(dd, sub = "Discordant x Motifs", k_branches = 5, k_labels = 5, sort = T)
   })
   
+  ## Creating tanglegram for Concordant vs. Discordant Harmony
+  ## Just creates two dendrograms based on clustered objects
   output$condisTanglegram <- renderPlot({
     dd <-
       dendlist(as.dendrogram(conhclustx()), as.dendrogram(dishclustx()))
     tanglegram(dd, sub = "Concordant x Discordant", k_branches = 5, k_labels = 5, sort = T)
   })
   
-  
+  ## I think this is the updated version of the above code. Instead of specific comparisons pre-computed I switched to a choice input
+  ## calculating all the different dendrograms necessary and then changing up the graph based on the input choice
+  ## I will try commenting out the previous later. 
   output$tanglegram <- renderPlot({
     choices <- c("Concordant", "Discordant", "Phylogeny", "Up Motif similarity", "Down Motif similarity")
     
@@ -1530,6 +1677,8 @@ motifloader <- function(fn){
     tanglegram(dd, sub = paste(input$tanglechoice1, "x", input$tanglechoice2), k_branches = input$kbreaks, k_labels = input$kbreaks, sort = T, which = c(which(choices == input$tanglechoice1), which(choices == input$tanglechoice2)))
   })
   
+  ## This creates the matrix of motif similarity 
+  ## Subsets the pwms object based on user input then calls compare_motifs
   motifmat <- reactive({
     subids <- unique(subdt()[, TF1])
     # pattern <- paste0("^(", paste0(subids, collapse = "|"), ")_")
@@ -1548,11 +1697,14 @@ motifloader <- function(fn){
     motifmat <- compare_motifs(subpwms, method = input$motifcompmethod)
   })
   
+  ## Calculates clustering object for motifs
   motifhclust <- reactive({
     motifdist <- dist(motifmat(), method = input$distmeth)
     motifhclust <- hclust(motifdist, method = input$clustmeth)
   })
   
+  ## Specifically calculating the motif similarity but for motifs calculated on only UP Regulated targets
+  ## I don't remember where this is used
   motifupclust <- reactive({
     keep <- grep("_up", rownames(motifmat()), value = TRUE)
     
@@ -1561,6 +1713,7 @@ motifloader <- function(fn){
     motifupclust <- hclust(motifdist, method = input$clustmeth)
   })
   
+  ## Calculating clustered object but for motifs calculated only on DOWN Regulated targets
   motifdownclust <- reactive({
     keep <- grep("_down", rownames(motifmat()), value = TRUE)
     #message("subnames: ", keep)
@@ -1569,6 +1722,9 @@ motifloader <- function(fn){
     motifdist <- dist(submat, method = input$distmeth)
     motifdownclust <- hclust(motifdist, method = input$clustmeth)
   })
+  
+  
+  ## Heatmap of motif similarity from precomputed clustered objects
   
   output$motifheatmap <- renderPlotly({
     
@@ -1585,20 +1741,33 @@ motifloader <- function(fn){
     ggplot(motifnar, aes(x = TF1, y = TF2, fill = value)) + geom_raster()
   })
   
+  
+  ## Motif dendrogram from Global Analyses
+  ## Returns an interactive dendrogram
   output$motifdend <- renderPlotly({
     dd <- as.dendrogram(motifhclust())
     ddplot <- ggdendrogram(dd)
     ggplotly(ddplot)
   })
   
+  ## This is a datatable over in Target Regulation - third tab
+  ## Returns a datatable subsetted and in narrow format from the DEGs data
+  ## Shows all TFs that target any of the provided Targets in the allgenes input
   output$tfregdt <- renderDataTable({
     setDT(targetsubnar())
   })
   
+  ## This is a datatable in Target Regulation - third tab
+  ## Takes the target subsetted/filtered data from DEGs data
+  ## and then filters the vertices data structure based on DEG target regulation
+  ## Returns the datatable showing TF, Family, Transcriptional Enhancer Strength, and shape - is a tf or not
   output$targetregdt <- renderDataTable({
     setDT(subvs())
   })
   
+  ## reactive function to create targetsubnar datatable
+  ## uses User supplied cutoffs to filter and subset DEG data
+  ## Restricts based on a list of Targets
   targetsubnar <- reactive({
     padjcutoff <- as.numeric(input$regpcutoff)
     l2fccutoff <- as.numeric(input$reglfccutoff)
@@ -1606,11 +1775,18 @@ motifloader <- function(fn){
     subnar <- narpv[rn %in% input$allgenes][padj < padjcutoff][abs(log2FoldChange) > l2fccutoff]
   })
   
+  ## Reactive function that subsets and filters vertice datastructure
+  ## Restricts vertices to only the TFs regulating a given set of targets
+  ## Relabels resulting output columns for readability
   subvs <- reactive({
     subnar <- targetsubnar()
     unique(vertices[(V1 %in% subnar$TF) | (V1 %in% subnar$rn) | (V1 %in% subnar$TF_ID), .(V1, label = TF, group = Family, value = TedStrength, shape = shape)])
   })
   
+  
+  ## Generating the actual network graph for the Target Regulation tab
+  ## Takes the data from DEG data and vertice data (targetsubnar() and subvs() just created)
+  ## Creates a directed graph then makes it interactive with VisNetwork
   output$regulators <- renderVisNetwork({
     
     subnar <- targetsubnar()
@@ -1637,46 +1813,7 @@ motifloader <- function(fn){
               visLegend()
     
     
-    # ggi <- ggraph(mygraph, "tree") +
-    # 
-    #   geom_edge_diagonal(
-    #     aes(
-    #       color = factor(sign(log2FoldChange)),
-    #       width = log2FoldChange
-    #       ),
-    #     arrow = arrow(
-    #       #angle = ifelse(sign(newdt$TargetFC) == 1, 30, 90),
-    #       type = "closed"
-    #     ),
-    # 
-    #     start_cap = circle(5, 'mm'),
-    #     end_cap = circle(5, 'mm'),
-    #     #alpha = 0.6,
-    #     strength = 0.2
-    #   ) +
-    # 
-    #   geom_node_text(
-    #     aes(label = name),
-    #     size = 10,
-    #     repel = T,
-    #     #nudge_x = -0.1
-    #   ) +
-    # 
-    #   geom_node_point(
-    #     aes(size = Degree)
-    #   ) +
-    # 
-    #   theme_void(base_size = 20)
     
-    #newd3 <- igraph_to_networkD3(mygraph)
-
-    # simpleNetwork(
-    #   subnar[,.(TF, rn, padj, log2FoldChange)], 
-    #   zoom = T, 
-    #   linkColour = subnar$Color, 
-    #   nodeColour = subnar$Color, 
-    #   opacity = 0.8 
-    #   )
       
      
   })
