@@ -58,6 +58,16 @@ dt <- fread("Data/harmonytable_nobatch_nebs.tsv")
 setnames(dt, c("TF", "Intersect_Concordant", "Intersect_Discordant", "PValue_Concordant", "PValue_Discordant", "Correlation_Concordant", "Correlation_Discordant", "Harmony_Concordant", "Harmony_Discordant"), c("TF1", "Concordant_Intersect", "Discordant_Intersect", "Concordant_PValue", "Discordant_PValue", "Concordant_Correlation", "Discordant_Correlation", "Concordant_Harmony", "Discordant_Harmony"))
 
 ## Harmony is calculated directionally - so each TF is 'TF1' and compared against all others, meaning I need to remove rows
+
+###### NEW
+## Trying out a signed Harmony score
+## Convert harmony table to signed harmony
+setDT(dt)
+dt[, Harmony := Concordant_Harmony - Discordant_Harmony]
+
+####
+####
+
 ## TF1 is the same as TF2
 dt <- dt[!(TF1 == TF2)]
 ## Cleaning up the TF names - these two steps can be done ahead of time to decrease intial load time
@@ -506,27 +516,32 @@ ui <- navbarPage("Landscape of TF Harmony",
                      fileInput(inputId = "targetupload", label = "Upload list of Targets"),
                      textInput(inputId = "regpcutoff", label = "Adjusted P-value Cutoff:", value = "0.05"),
                      textInput(inputId = "reglfccutoff", label = "Log2FoldChange Cutoff:", value = "0"),
-                     selectInput(
-                       inputId = "targetnetworkstyle",
-                       label = "Network Style:",
-                       choices = c(
-                         "layout_with_sugiyama",
-                         "layout_on_sphere",
-                         "layout_with_fr",
-                         "layout_with_gem",
-                         "layout_with_kk",
-                         "layout_with_lgl",
-                         "layout_with_mds",
-                         "layout_in_circle",
-                         "layout_nicely",
-                         "layout_as_star",
-                         "layout_as_tree",
-                         "layout_on_grid",
-                         "layout_with_dh"
-                       ),
-                       selected = "layout_with_sugiyama",
-                       multiple = F
-                     )
+                     textInput(inputId = "networkhcutoff", label = "Harmony Cutoff:", value = "0.5"),
+                     
+                     
+                     
+                     
+                     # selectInput(
+                     #   inputId = "targetnetworkstyle",
+                     #   label = "Network Style:",
+                     #   choices = c(
+                     #     "layout_with_sugiyama",
+                     #     "layout_on_sphere",
+                     #     "layout_with_fr",
+                     #     "layout_with_gem",
+                     #     "layout_with_kk",
+                     #     "layout_with_lgl",
+                     #     "layout_with_mds",
+                     #     "layout_in_circle",
+                     #     "layout_nicely",
+                     #     "layout_as_star",
+                     #     "layout_as_tree",
+                     #     "layout_on_grid",
+                     #     "layout_with_dh"
+                     #   ),
+                     #   selected = "layout_with_sugiyama",
+                     #   multiple = F
+                     # )
                    ),
                    
                    ## This is where the list of all targets from NarPV is used
@@ -538,17 +553,71 @@ ui <- navbarPage("Landscape of TF Harmony",
                      width = "100%",
                      selected = allgeneids[1]
                    ),
-                   splitLayout(
-                   visNetworkOutput(
-                    outputId = "regulators",
-                    width = "50%",
-                    height = 1000
-                   )%>% withSpinner(),
-                   verticalLayout(
-                   DT::DTOutput(outputId = "tfregdt", height = 500, width = "50%"),
-                   DT::DTOutput(outputId = "targetregdt", height = 500, width = "50%")
-                   )
+                   
+                   
+                            
+                            fluidRow(
+                              column(12,
+                                     # your inputs here
+                              )
+                            ),
+                            
+                            fluidRow(
+                              column(12,
+                                     plotOutput("tfHarmonyScatter", height = "350px")
+                              )
+                            ),
+                   fluidRow(
+                     column(2,
+                            selectInput(
+                              "module_select",
+                              "Select module",
+                              choices = "All",
+                              selected = "All"
+                            )
+                            ),
+                     column(2,
+                   sliderInput(inputId = "harmtrans", label = "Harmony Transparency:", min = 0, max = 1, value = 0.25, step = 0.05, ticks = FALSE)),
+                   column(4, 
+                   sliderInput(inputId = "logtrans", label = "Log2FC Transparency:", min = 0, max = 1, value = 1, step = 0.05, ticks = FALSE)
                    ),
+                   column(2,
+                          selectInput(
+                            "louvain_weight_mode",
+                            "Module definition",
+                            choices = c(
+                              "Absolute Harmony" = "abs_harmony",
+                              "Absolute Harmony squared" = "abs_harmony_sq",
+                              "Concordant Harmony" = "concordant",
+                              "Discordant Harmony" = "discordant"
+                            ),
+                            selected = "abs_harmony"
+                          ))
+                     
+                   ),
+                     
+                     
+                            fluidRow(
+                              column(12,
+                                     visNetworkOutput("regulators", height = "850px")
+                              )
+                            ),
+                   fluidRow(
+                     plotOutput("targetRegHeatmap", height = "700px")
+                   )
+                   
+                            
+                            # fluidRow(
+                            #   column(6,
+                            #          dataTableOutput("tfregdt")
+                            #   ),
+                            #   column(6,
+                            #          dataTableOutput("targetregdt")
+                            #   )
+                            # )
+                   ,
+
+                   
                    
           ## I had to include this after adding some packages - never figured out which. 
           ## I added the spinner, and motif, and tanglegram packages all around the same time
@@ -1485,7 +1554,7 @@ motifloader <- function(fn){
           legend.position = "bottom"
         ) + 
 
-        scale_fill_viridis_c(option = "a") +
+        scale_fill_viridis_c(option = "A") +
         
         #geom_abline(slope = 1, intercept = 0) + 
         
@@ -1772,8 +1841,328 @@ motifloader <- function(fn){
     padjcutoff <- as.numeric(input$regpcutoff)
     l2fccutoff <- as.numeric(input$reglfccutoff)
     
-    subnar <- narpv[rn %in% input$allgenes][padj < padjcutoff][abs(log2FoldChange) > l2fccutoff]
+    narpv[rn %in% input$allgenes][padj < padjcutoff][abs(log2FoldChange) > l2fccutoff]
   })
+  
+  ###################
+  ### Newly added ###
+######################
+  
+  tf_lookup <- reactive({
+    unique(narpv[, .(TF_ID, TF)])
+  })
+  
+  target_harmony_dt <- reactive({
+    lk <- tf_lookup()
+    
+    h <- copy(dt)
+    
+    h <- merge(h, lk, by.x = "TF1", by.y = "TF", all.x = TRUE)
+    setnames(h, "TF_ID", "TF1_ID")
+    
+    h <- merge(h, lk, by.x = "TF2", by.y = "TF", all.x = TRUE)
+    setnames(h, "TF_ID", "TF2_ID")
+    
+    h[, Harmony := Concordant_Harmony - Discordant_Harmony]
+    h[, abs_harmony := abs(Harmony)]
+    h[, abs_harmony_sq := abs(Harmony)^2]
+    
+    h[, concordant_weight := fifelse(is.na(Concordant_Harmony), 0, Concordant_Harmony)]
+    h[, discordant_weight := fifelse(is.na(Discordant_Harmony), 0, Discordant_Harmony)]
+    
+    h[]
+  })
+  
+  tf_modules <- reactive({
+    reg <- tf_reg_summary()
+    hit <- unique(reg$TF_ID)
+    req(length(hit) >= 1)
+    
+    hdt <- target_harmony_dt()
+    
+    weight_col <- switch(
+      input$louvain_weight_mode,
+      "abs_harmony" = "abs_harmony",
+      "abs_harmony_sq" = "abs_harmony_sq",
+      "concordant" = "concordant_weight",
+      "discordant" = "discordant_weight",
+      "abs_harmony"
+    )
+    
+    h <- hdt[
+      TF1_ID %in% hit & TF2_ID %in% hit & TF1_ID != TF2_ID,
+      .(
+        TF1_ID,
+        TF2_ID,
+        abs_harmony,
+        abs_harmony_sq,
+        concordant_weight,
+        discordant_weight
+      )
+    ]
+    
+    mods <- compute_louvain_modules(h, weight_col = weight_col, cutoff = 0.02)
+    
+    if (is.null(mods)) {
+      return(data.table(
+        TF_ID = hit,
+        module = seq_along(hit)
+      ))
+    }
+    
+    mods[]
+  })
+  
+    # Pick a single TF key to join on everywhere (TF_ID preferred; fall back to TF)
+  tf_key_col <- reactive({
+    if ("TF_ID" %in% names(targetsubnar())) "TF_ID" else "TF"
+  })
+  
+  # A per-TF summary for the uploaded gene set
+  tf_reg_summary <- reactive({
+    subnar <- targetsubnar()
+    req(nrow(subnar) > 0)
+    
+    out <- subnar[, .(
+      TF = first(TF),
+      Family = first(Family),
+      
+      n_targets = uniqueN(rn),
+      n_up_targets = uniqueN(rn[log2FoldChange > 0]),
+      n_down_targets = uniqueN(rn[log2FoldChange < 0]),
+      
+      mean_abs_l2fc = mean(abs(log2FoldChange), na.rm = TRUE),
+      mean_l2fc = mean(log2FoldChange, na.rm = TRUE),
+      
+      mean_up_l2fc = mean(log2FoldChange[log2FoldChange > 0], na.rm = TRUE),
+      mean_down_l2fc = mean(log2FoldChange[log2FoldChange < 0], na.rm = TRUE),
+      
+      sum_abs_l2fc = sum(abs(log2FoldChange), na.rm = TRUE),
+      sum_up_l2fc = sum(log2FoldChange[log2FoldChange > 0], na.rm = TRUE),
+      sum_down_l2fc = sum(log2FoldChange[log2FoldChange < 0], na.rm = TRUE),
+      
+      best_padj = min(padj, na.rm = TRUE)
+    ), by = TF_ID]
+    
+    # clean NaN from empty subsets
+    clean_cols <- c("mean_up_l2fc", "mean_down_l2fc")
+    for (j in clean_cols) {
+      out[is.nan(get(j)), (j) := 0]
+    }
+    
+    out[]
+  })
+
+  
+  # Mean Harmony of each "hit TF" to the other "hit TFs"
+  tf_mean_harmony <- reactive({
+    reg <- tf_reg_summary()
+    hit <- unique(reg$TF_ID)
+    req(length(hit) >= 1)
+    
+    hdt <- target_harmony_dt()
+    
+    h <- hdt[
+      TF1_ID %in% hit & TF2_ID %in% hit & TF1_ID != TF2_ID,
+      .(TF1_ID, TF2_ID, Concordant_Harmony, Discordant_Harmony, Harmony)
+    ]
+    
+    # outgoing from TF1 perspective
+    out_sum <- h[, .(
+      sum_concordant_harmony_out = sum(Concordant_Harmony[!is.na(Concordant_Harmony)], na.rm = TRUE),
+      sum_discordant_harmony_out = sum(Discordant_Harmony[!is.na(Discordant_Harmony)], na.rm = TRUE),
+      mean_concordant_harmony_out = mean(Concordant_Harmony[!is.na(Concordant_Harmony) & Concordant_Harmony != 0], na.rm = TRUE),
+      mean_discordant_harmony_out = mean(Discordant_Harmony[!is.na(Discordant_Harmony) & Discordant_Harmony != 0], na.rm = TRUE),
+      n_harmony_connections_out = uniqueN(TF2_ID[!is.na(Harmony) & Harmony != 0])
+    ), by = .(TF_ID = TF1_ID)]
+    
+    # incoming to TF2 perspective
+    in_sum <- h[, .(
+      sum_concordant_harmony_in = sum(Concordant_Harmony[!is.na(Concordant_Harmony)], na.rm = TRUE),
+      sum_discordant_harmony_in = sum(Discordant_Harmony[!is.na(Discordant_Harmony)], na.rm = TRUE),
+      mean_concordant_harmony_in = mean(Concordant_Harmony[!is.na(Concordant_Harmony) & Concordant_Harmony != 0], na.rm = TRUE),
+      mean_discordant_harmony_in = mean(Discordant_Harmony[!is.na(Discordant_Harmony) & Discordant_Harmony != 0], na.rm = TRUE),
+      n_harmony_connections_in = uniqueN(TF1_ID[!is.na(Harmony) & Harmony != 0])
+    ), by = .(TF_ID = TF2_ID)]
+    
+    out <- merge(out_sum, in_sum, by = "TF_ID", all = TRUE)
+    
+    num_cols <- setdiff(names(out), "TF_ID")
+    for (j in num_cols) {
+      out[is.na(get(j)) | is.nan(get(j)), (j) := 0]
+    }
+    
+    out[]
+  })
+  
+  tf_scatter_dt <- reactive({
+    reg  <- tf_reg_summary()
+    mh   <- tf_mean_harmony()
+    mods <- tf_modules()
+    
+    out <- merge(reg, mh, by = "TF_ID", all.x = TRUE)
+    out <- merge(out, mods, by = "TF_ID", all.x = TRUE)
+    
+    fill_zero_cols <- c(
+      "sum_concordant_harmony_out",
+      "sum_discordant_harmony_out",
+      "mean_concordant_harmony_out",
+      "mean_discordant_harmony_out",
+      "n_harmony_connections_out",
+      "sum_concordant_harmony_in",
+      "sum_discordant_harmony_in",
+      "mean_concordant_harmony_in",
+      "mean_discordant_harmony_in",
+      "n_harmony_connections_in"
+    )
+    
+    for (j in fill_zero_cols) {
+      if (j %in% names(out)) {
+        out[is.na(get(j)) | is.nan(get(j)), (j) := 0]
+      }
+    }
+    
+    out[, sum_concordant_harmony := sum_concordant_harmony_out + sum_concordant_harmony_in]
+    out[, sum_discordant_harmony := sum_discordant_harmony_out + sum_discordant_harmony_in]
+    
+    out[, mean_concordant_harmony := mean_concordant_harmony_out + mean_concordant_harmony_in]
+    out[, mean_discordant_harmony := mean_discordant_harmony_out + mean_discordant_harmony_in]
+    
+    out[, n_harmony_connections := n_harmony_connections_out + n_harmony_connections_in]
+    
+    out[, sum_harmony := sum_concordant_harmony - sum_discordant_harmony]
+    out[, mean_harmony := mean_concordant_harmony - mean_discordant_harmony]
+    
+    out[is.na(module), module := 0L]
+    
+    out[, label := fifelse(is.na(TF) | TF == "", TF_ID, TF)]
+    
+    mod_sizes <- out[, .(module_size = .N), by = module]
+    out <- merge(out, mod_sizes, by = "module", all.x = TRUE)
+    
+    out[]
+  })
+    
+  heatmap_dt <- reactive({
+    subnar <- targetsubnar()
+    reg    <- tf_scatter_dt()
+    
+    d <- merge(
+      subnar,
+      reg[, .(TF_ID, label, module)],
+      by = "TF_ID",
+      all.x = TRUE
+    )
+    
+    d[]
+  })
+  
+  output$targetRegHeatmap <- renderPlot({
+    d <- heatmap_dt()
+    req(nrow(d) > 0)
+    
+    # build matrix
+    mat_dt <- d[, .(value = mean(log2FoldChange, na.rm = TRUE)),
+                by = .(label, rn, module)]
+    
+    mat_wide <- data.table::dcast(
+      mat_dt,
+      label + module ~ rn,
+      value.var = "value",
+      fill = NA
+    )
+    
+    row_meta <- mat_wide[, .(label, module)]
+    mat <- as.matrix(mat_wide[, !c("label", "module")])
+    rownames(mat) <- mat_wide$label
+    
+    # clustering matrix (NA → 0 only for clustering)
+    mat_clust <- mat
+    mat_clust[is.na(mat_clust)] <- 0
+    
+    # cluster targets using correlation distance
+    if (ncol(mat_clust) > 1) {
+      col_cor <- cor(mat_clust, use = "pairwise.complete.obs")
+      col_dist <- as.dist(1 - col_cor)
+      col_hc <- hclust(col_dist, method = "complete")
+      gene_order <- colnames(mat_clust)[col_hc$order]
+    } else {
+      gene_order <- colnames(mat_clust)
+    }
+    
+    # long format for plotting
+    plot_dt <- data.table::melt(
+      data.table(label = rownames(mat), mat, check.names = FALSE),
+      id.vars = "label",
+      variable.name = "rn",
+      value.name = "log2FoldChange"
+    )
+    
+    plot_dt <- merge(plot_dt, row_meta, by = "label", all.x = TRUE)
+    
+    # order TFs within module
+    plot_dt[, label := factor(label, levels = unique(plot_dt[order(module, label)]$label))]
+    plot_dt[, rn := factor(rn, levels = gene_order)]
+    plot_dt[, reg_dir := sign(log2FoldChange)]
+    
+    ggplot(plot_dt, aes(x = rn, y = label, fill = factor(reg_dir))) +
+      geom_tile(color = NA) +
+      
+      # facet by module
+      facet_grid(module ~ ., scales = "free_y", space = "free_y") +
+      
+      scale_fill_manual(
+        values = c(
+          "-1" = "blue",
+          "0" = "white",
+          "1" = "red"
+        ),
+        name = "Regulation"
+      )+
+      
+      labs(
+        x = "Target genes (clustered)",
+        y = "TFs (grouped by module)",
+        fill = "log2FC"
+      ) +
+      
+      theme_bw() +
+      theme(
+        strip.text.y = element_text(angle = 0),
+        axis.text.x = element_text(angle = 45, hjust = 1)
+      )
+  })
+  
+  
+  #####################
+  ## New scatter plot
+  #######################
+  
+  output$tfHarmonyScatter <- renderPlot({
+    d <- tf_scatter_dt()
+    req(nrow(d) > 0)
+    
+    d[, harmony_y := sum_concordant_harmony_out - sum_discordant_harmony_out]
+    
+    ggplot(d, aes(x = n_targets, y = harmony_y, color = factor(module))) +
+      geom_hline(yintercept = 0, linetype = "dashed") +
+      geom_point(aes(size = n_targets), alpha = 0.85) +
+      ggrepel::geom_text_repel(aes(label = label), size = 3, max.overlaps = 30) +
+      labs(
+        x = "# regulated target genes",
+        y = "Outgoing Harmony balance",
+        color = "Module",
+        size = "# targets"
+      ) +
+      theme_bw()
+  })
+  
+  
+  
+  ###################
+  ###################
+  ###################
+  
   
   ## Reactive function that subsets and filters vertice datastructure
   ## Restricts vertices to only the TFs regulating a given set of targets
@@ -1783,40 +2172,351 @@ motifloader <- function(fn){
     unique(vertices[(V1 %in% subnar$TF) | (V1 %in% subnar$rn) | (V1 %in% subnar$TF_ID), .(V1, label = TF, group = Family, value = TedStrength, shape = shape)])
   })
   
+    
   
-  ## Generating the actual network graph for the Target Regulation tab
-  ## Takes the data from DEG data and vertice data (targetsubnar() and subvs() just created)
-  ## Creates a directed graph then makes it interactive with VisNetwork
-  output$regulators <- renderVisNetwork({
+  ##########################
+  ## Module Detection ######
+  ##########################
+  
+  compute_louvain_modules <- function(h, weight_col = "weight", cutoff = 0.02) {
     
-    subnar <- targetsubnar()
-    #subnar[, c("ID", "TF") := tstrsplit(TF, "_")]
+    h <- copy(h)
+    h <- h[!is.na(get(weight_col)) & get(weight_col) >= cutoff]
     
-    # mygraph <- as_tbl_graph(
-    #   subnar[,.(TF, rn, padj, value = log2FoldChange, color = Color)], directed = T, 
-    #   )
+    if (nrow(h) == 0) {
+      return(NULL)
+    }
     
-    mygraph <- graph_from_data_frame(
-      
-      subnar[,.(TF_ID, rn, padj, value = log2FoldChange, color = Color, label = TF)], directed = T, 
-      vertices = subvs()
-      
+    h[, pair_id := ifelse(
+      TF1_ID < TF2_ID,
+      paste(TF1_ID, TF2_ID, sep = "__"),
+      paste(TF2_ID, TF1_ID, sep = "__")
+    )]
+    
+    h <- h[, .(
+      TF1_ID = first(TF1_ID),
+      TF2_ID = first(TF2_ID),
+      weight = max(get(weight_col), na.rm = TRUE)
+    ), by = pair_id]
+    
+    g_mod <- igraph::graph_from_data_frame(
+      d = h[, .(from = TF1_ID, to = TF2_ID, weight)],
+      directed = FALSE
     )
     
+    cl <- igraph::cluster_louvain(g_mod, weights = igraph::E(g_mod)$weight)
+    memb <- igraph::membership(cl)
     
-    V(mygraph)$Degree <- igraph::degree(mygraph)
-    visIgraph(
-      mygraph, 
-      layout = input$targetnetworkstyle
+    data.table(
+      TF_ID = names(memb),
+      module = as.integer(memb)
+    )
+  }
+  
+
+  
+  tf_modules <- reactive({
+    reg <- tf_reg_summary()
+    hit <- unique(reg$TF_ID)
+    req(length(hit) >= 1)
+    
+    hdt <- target_harmony_dt()
+    harmony_cutoff <- 0.05
+    
+    weight_col <- switch(
+      input$louvain_weight_mode,
+      "abs_harmony" = "abs_harmony",
+      "abs_harmony_sq" = "abs_harmony_sq",
+      "concordant" = "concordant_weight",
+      "discordant" = "discordant_weight",
+      "abs_harmony"
+    )
+    
+    h <- hdt[
+      TF1_ID %in% hit & TF2_ID %in% hit & TF1_ID != TF2_ID,
+      .(
+        TF1_ID,
+        TF2_ID,
+        abs_harmony,
+        abs_harmony_sq,
+        concordant_weight,
+        discordant_weight
+      )
+    ]
+    
+    # keep only rows with meaningful weight in the chosen mode
+    h <- h[!is.na(get(weight_col)) & get(weight_col) >= harmony_cutoff]
+    
+    if (nrow(h) == 0) {
+      return(data.table(
+        TF_ID = hit,
+        module = seq_along(hit)
+      ))
+    }
+    
+    h[, pair_id := ifelse(
+      TF1_ID < TF2_ID,
+      paste(TF1_ID, TF2_ID, sep = "__"),
+      paste(TF2_ID, TF1_ID, sep = "__")
+    )]
+    
+    h <- h[, .(
+      TF1_ID = first(TF1_ID),
+      TF2_ID = first(TF2_ID),
+      weight = max(get(weight_col), na.rm = TRUE)
+    ), by = pair_id]
+    
+    g_mod <- igraph::graph_from_data_frame(
+      d = h[, .(from = TF1_ID, to = TF2_ID, weight)],
+      directed = FALSE,
+      vertices = data.frame(name = hit)
+    )
+    
+    cl <- igraph::cluster_louvain(g_mod, weights = igraph::E(g_mod)$weight)
+    memb <- igraph::membership(cl)
+    
+    data.table(
+      TF_ID = names(memb),
+      module = as.integer(memb)
+    )
+  })
+  
+  observe({
+    d <- tf_scatter_dt()
+    req(nrow(d) > 0)
+    
+    mods <- sort(unique(d$module))
+    
+    updateSelectInput(
+      session,
+      "module_select",
+      choices = c("All", as.character(mods)),
+      selected = "All"
+    )
+  })
+  
+  
+    
+
+  
+  #############################
+  ## New regulators gene network
+  ##############################
+  
+  output$regulators <- renderVisNetwork({
+    
+    reg_all <- tf_scatter_dt()
+
+    req(nrow(reg_all) > 0)
+    
+    # Ensure stable label column exists
+    reg_all[, label := fifelse(is.na(TF) | TF == "", TF_ID, TF)]
+    
+    # Optional module filter
+    reg <- copy(reg_all)
+    if (!is.null(input$module_select) && input$module_select != "All") {
+      reg <- reg[module == as.integer(input$module_select)]
+    }
+    
+    req(nrow(reg) > 0)
+    
+    hit <- unique(reg$TF_ID)
+    
+    subnar <- copy(targetsubnar())
+    subnar <- subnar[TF_ID %in% hit]
+    req(nrow(subnar) > 0)
+    
+    # -------------------------
+    # Nodes
+    # -------------------------
+    module_colors <- c(
+      "#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00",
+      "#a65628", "#f781bf", "#999999", "#66c2a5", "#fc8d62",
+      "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f"
+    )
+    
+    tf_nodes <- reg[, .(
+      id = TF_ID,
+      label = label,
+      group = "TF",
+      shape = "triangle",
+      value = n_targets,
+      color = module_colors[((module - 1) %% length(module_colors)) + 1],
+      title = paste0(
+        "<b>", label, "</b><br>",
+        "TF_ID: ", TF_ID, "<br>",
+        "Family: ", Family, "<br>",
+        "Module: ", module, "<br>",
+        "Module size: ", module_size, "<br>",
+        "Module definition: ", input$louvain_weight_mode, "<br><br>",
+        
+        "<b>Target regulation</b><br>",
+        "Total targets: ", n_targets, "<br>",
+        "Up targets: ", n_up_targets, "<br>",
+        "Down targets: ", n_down_targets, "<br>",
+        "Mean |log2FC|: ", round(mean_abs_l2fc, 3), "<br>",
+        "Mean up log2FC: ", round(mean_up_l2fc, 3), "<br>",
+        "Mean down log2FC: ", round(mean_down_l2fc, 3), "<br>",
+        "Sum up log2FC: ", round(sum_up_l2fc, 3), "<br>",
+        "Sum down log2FC: ", round(sum_down_l2fc, 3), "<br><br>",
+        
+        "<b>Harmony</b><br>",
+        "Outgoing Harmony connections: ", n_harmony_connections_out, "<br>",
+        "Incoming Harmony connections: ", n_harmony_connections_in, "<br>",
+        "Sum Concordant Harmony (out): ", round(sum_concordant_harmony_out, 3), "<br>",
+        "Sum Discordant Harmony (out): ", round(sum_discordant_harmony_out, 3), "<br>",
+        "Mean Concordant Harmony (out): ", round(mean_concordant_harmony_out, 3), "<br>",
+        "Mean Discordant Harmony (out): ", round(mean_discordant_harmony_out, 3), "<br>",
+        "Sum Concordant Harmony (in): ", round(sum_concordant_harmony_in, 3), "<br>",
+        "Sum Discordant Harmony (in): ", round(sum_discordant_harmony_in, 3), "<br>",
+        "Mean Concordant Harmony (in): ", round(mean_concordant_harmony_in, 3), "<br>",
+        "Mean Discordant Harmony (in): ", round(mean_discordant_harmony_in, 3), "<br><br>",
+        
+        "Best padj: ", signif(best_padj, 3)
+      )
+    )]
+    
+    gene_nodes <- data.table(
+      id = unique(subnar$rn),
+      label = unique(subnar$rn),
+      group = "Gene",
+      shape = "box",
+      value = 1,
+      color = "#d9d9d9"
+    )
+    
+    nodes <- rbind(tf_nodes, gene_nodes, fill = TRUE)
+    
+    # -------------------------
+    # TF -> Gene edges
+    # -------------------------
+    tf_gene_edges <- subnar[, .(
+      from = TF_ID,
+      to = rn,
+      arrows = "to",
+      value = abs(log2FoldChange),
+      width = pmax(1, 3 * abs(log2FoldChange)),
+      title = paste0(
+        "<b>", fifelse(is.na(TF) | TF == "", TF_ID, TF), " → ", rn, "</b><br>",
+        "Direction: ", ifelse(log2FoldChange > 0, "Positive", "Negative"), "<br>",
+        "log2FC: ", round(log2FoldChange, 3), "<br>",
+        "padj: ", signif(padj, 3)
+      ),
+      edge_col = ifelse(
+        log2FoldChange > 0,
+        paste0("rgba(139,0,0,", input$logtrans, ")"),   # darkred
+        paste0("rgba(0,0,139,", input$logtrans, ")")    # darkblue
+      )
+    )]
+    
+    tf_gene_edges[, color := lapply(
+      edge_col,
+      function(cc) list(color = cc, highlight = cc, hover = cc, inherit = FALSE)
+    )]
+    tf_gene_edges[, edge_col := NULL]
+    
+
+    # -------------------------
+    # TF -> TF Harmony edges (DIRECTED)
+    # -------------------------
+    harmony_cutoff <- input$networkhcutoff
+    k <- 5L
+    hdt <- target_harmony_dt()
+    
+    h <- hdt[
+      TF1_ID %in% hit & TF2_ID %in% hit & TF1_ID != TF2_ID &
+        !is.na(Harmony) & abs(Harmony) >= harmony_cutoff,
+      .(TF1_ID, TF2_ID, Harmony, Concordant_Harmony, Discordant_Harmony)
+    ]
+    
+    if (nrow(h) > 0) {
       
-              ) %>% visOptions(highlightNearest = list(enabled = T, degree = 1, hover = T), collapse = T ) %>%
-              visLegend()
+      # keep top-k outgoing harmony edges per TF1
+      h <- h[order(TF1_ID, -abs(Harmony))]
+      h <- h[, head(.SD, k), by = TF1_ID]
+      
+      tf_tf_edges <- h[, .(
+        from = TF1_ID,
+        to = TF2_ID,
+        arrows = "to",
+        value = abs(Harmony),
+        width = pmax(0.1, 0.8 * abs(Harmony)),
+        dashes = TRUE,
+        smooth = list(enabled = TRUE, type = "curvedCW", roundness = 0.15),
+        title = paste0(
+          "<b>", TF1_ID, " → ", TF2_ID, "</b><br>",
+          "Harmony: ", round(Harmony, 3), "<br>",
+          "Concordant Harmony: ", round(Concordant_Harmony, 3), "<br>",
+          "Discordant Harmony: ", round(Discordant_Harmony, 3), "<br>",
+          "Type: ", ifelse(Harmony >= 0, "Concordant-biased", "Discordant-biased")
+        ),
+        edge_col = ifelse(
+          Harmony >= 0,
+          paste0("rgba(217,95,2,", input$harmtrans, ")"),
+          paste0("rgba(117,112,179,", input$harmtrans, ")")
+        )
+      )]
+      
+      tf_tf_edges[, color := lapply(
+        edge_col,
+        function(cc) list(color = cc, highlight = cc, hover = cc, inherit = FALSE)
+      )]
+      tf_tf_edges[, edge_col := NULL]
+      
+    } else {
+      tf_tf_edges <- data.table(
+        from = character(),
+        to = character(),
+        arrows = character(),
+        value = numeric(),
+        width = numeric(),
+        dashes = logical(),
+        smooth = list(),
+        title = character(),
+        color = list()
+      )
+    }
+    
+    # -------------------------
+    # Combine edges
+    # -------------------------
+    edges <- rbind(tf_gene_edges, tf_tf_edges, fill = TRUE)
+    
+    # -------------------------
+    # Render network
+    # -------------------------
+    visNetwork(nodes, edges, width = "100%", height = "900px") %>%
+      visGroups(groupname = "TF", shape = "triangle") %>%
+      visGroups(groupname = "Gene", shape = "box") %>%
+      visOptions(
+        highlightNearest = list(enabled = TRUE, degree = 1, hover = TRUE),
+        nodesIdSelection = TRUE,
+        collapse = TRUE
+      ) %>%
+      visInteraction(
+        dragNodes = TRUE,
+        dragView = TRUE,
+        zoomView = TRUE,
+        navigationButtons = TRUE
+      ) %>%
+      #visHierarchicalLayout(enabled = TRUE, direction = "UD", sortMethod = "directed") %>%
+      visPhysics(
+        solver = "forceAtlas2Based",
+        stabilization = list(enabled = TRUE, iterations = 800, fit = TRUE)
+      ) %>%
+      visEvents(
+        stabilizationIterationsDone = "function () { this.setOptions({physics: false}); }"
+      )
     
     
+  
+  })
     
+  
+  
       
      
-  })
+ 
 
 }
 
