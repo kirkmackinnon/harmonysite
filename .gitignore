@@ -10,4 +10,9 @@
 !.gitignore
 !TF_Harmony/
 !TF_Harmony/app_working_backup.R
+!TF_Harmony/ui.R
+!TF_Harmony/helpers.R
+!TF_Harmony/data_loading.R
+!TF_Harmony/preprocess_data.R
+!TF_Harmony/CHANGES.txt
 !TF_Harmony/www/
