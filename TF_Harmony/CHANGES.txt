@@ -1,0 +1,214 @@
+Changes made to app_working_backup.R and new files
+====================================================
+
+NEW FILES
+---------
+
+data_loading.R
+  All data file reads and preprocessing that was previously at the top of
+  app_working_backup.R (lines 1-155 of the original). This includes reading
+  harmony tables, DEGs, TF family annotations, PWMs, cell type expression,
+  JIT datasets, vertex setup for network graphs, and all column renaming,
+  merging, and filtering done at startup. Loaded via source("data_loading.R").
+  Later rewritten to load preprocessed RDS files when available (see
+  preprocess_data.R below), falling back to raw TSV processing if not.
+
+preprocess_data.R
+  One-time script that reads all raw TSV/CSV data files, performs all column
+  renaming, merging, filtering, and cleanup, then saves the final objects as
+  compressed RDS files in Data/. Run once with `Rscript preprocess_data.R`
+  from the TF_Harmony directory after any data file changes.
+  RDS files created: dt.rds, narpv.rds, cte.rds, jitr.rds, jits.rds,
+  newdt.rds, vertices.rds, ids.rds, allgeneids.rds, idoptions.rds,
+  tfswithfamilies.rds, allteds.rds, pwms_processed.rds, pfms.rds,
+  phylo_dend.rds.
+
+helpers.R
+  Utility functions extracted from between the UI and server sections of the
+  original file. Contains:
+  - ftestfun: Fisher's exact test for DEG overlap significance
+  - findfile: Looks up significant DEGs for a list of TFs from narpv
+  - matchtidy: Pairwise comparison of DE result tables, tagging concordant/discordant
+  - harmony_hclust: NEW function that replaced four duplicated clustering
+    reactive blocks (~120 lines) with a single parameterized function
+  Loaded via source("helpers.R").
+
+ui.R
+  The full UI definition extracted from app_working_backup.R. Contains the
+  navbarPage layout with all three top-level panels (Global Analyses, Pairwise
+  Analyses, Target Regulation) and their sub-tabs. Loaded via source("ui.R").
+
+
+MODIFICATIONS TO app_working_backup.R
+--------------------------------------
+
+Structure:
+  - Removed ~155 lines of inline data loading, replaced with source("data_loading.R")
+  - Removed ~90 lines of helper functions, replaced with source("helpers.R")
+  - Removed ~400 lines of UI definition, replaced with source("ui.R")
+  - Main file now contains: library imports, source calls, server function, shinyApp()
+
+Bug fixes:
+  - Removed duplicate library(gprofiler2) (was loaded twice, lines 3 and 11)
+  - Removed library(Cairo) (unused, caused crash on systems without XQuartz)
+  - Removed reactiveConsole(TRUE) (debugging tool, not for production)
+  - Fixed broken caching in tarfs/matched reactives: exists("tarfs()") always
+    returned FALSE because it checked for a literal variable named "tarfs()".
+    Replaced with reactiveVal pattern that correctly passes previous results.
+  - Added nrow check in matchtidy (helpers.R) to handle the case where all
+    pairs are already cached and tempagg is empty.
+  - Fixed SVG/PNG mismatch in motif plot: tempfile had .png extension but
+    svg() device was used and contentType declared SVG. Changed to .svg.
+  - Fixed viridis palette options: "a" and "e" (lowercase) are invalid,
+    changed to "A" (magma) and "E" (cividis).
+  - Fixed melt.data.table warnings by adding explicit id.vars and measure.vars
+    to all three melt.data.table(subgraph()) calls.
+
+Performance:
+  - Removed suspendWhenHidden = FALSE on GO plot output. Previously forced
+    the gprofiler2 GOST API call on every app load. Now only runs when the
+    user visits the GO Terms tab.
+  - Changed allgenes selectInput to server-side selectizeInput for the large
+    gene list in Target Regulation. Choices are populated server-side instead
+    of sending all gene IDs to the browser on load.
+  - Deduplicated four clustering reactives (conhclustx, conhclusty, dishclustx,
+    dishclusty) into calls to harmony_hclust() in helpers.R. Reduced ~120 lines
+    to ~24 lines. Also fixed inconsistency where concordant reactives were
+    subsetting dt directly while discordant ones used subdt().
+  - Changed relationships and familyproportion render functions to use subdt()
+    instead of duplicating the same family/TF subsetting of dt inline. The
+    family/TF filtering now runs once in subdt() and is shared by all consumers.
+  - Pre-computed phylogenetic tree (MSA -> alignment -> distance -> bionj -> dendrogram)
+    once at startup in data_loading.R instead of recomputing it in three separate
+    renderPlot blocks (phyloconTanglegram, phylodisTanglegram, tanglegram).
+    The static phylo_dend object is now pruned per-render based on selected TFs,
+    but the expensive MSA conversion and tree building only happens once.
+  - Removed five orphaned tanglegram render outputs (conmotifTanglegram,
+    phyloconTanglegram, phylodisTanglegram, dismotifTanglegram, condisTanglegram)
+    that were not referenced in the UI. These were replaced by the single
+    output$tanglegram with dropdown selectors but never cleaned up. Removing them
+    eliminates ~80 lines of dead server code and stops unnecessary reactive
+    computations on every TF selection change.
+  - Removed orphaned output$motifbrowser renderPlot (~12 lines). Its tab panel
+    was previously commented out of the UI, so the render never displayed.
+
+UI improvements:
+  - Replaced GO term table: was publish_gosttable() rendering a static ggplot
+    image that could not scroll. Now uses DT::renderDT with a proper DataTable
+    showing source, term_id, term_name, term_size, and p_values columns.
+    Table is searchable, sortable, and paged (25 rows). P-values sort numerically
+    and display in scientific notation (e.g. 5.19e-18). Unlisted the p_values
+    list column (from multi_query) by taking the min per term.
+  - Fixed GO table layout: replaced splitLayout (caused header misalignment and
+    search bar clipping) with fluidRow/column in ui.R. Table now renders
+    correctly alongside the GO plot at 50/50 width.
+  - Replaced all textInput fields for numeric cutoffs with numericInput,
+    adding appropriate min/max/step values. Affects: familyharmonycutoff,
+    familypvcutoff, familyintersectcutoff, tfregpcutoff, tfreglfccutoff,
+    tfdegreecutoff, regpcutoff, reglfccutoff.
+  - Extracted the network layout choices (13 layouts repeated 3 times) into
+    a single network_layouts variable in ui.R.
+  - Fixed hardcoded CSS path (~/Desktop/github/HTT_144TFs/TF_Harmony/www/style.css)
+    to use the local www/style.css path.
+  - Removed dead motifloader function (had a typo tag$img instead of tags$img,
+    was never called).
+
+Dead code cleanup (original line numbers from app_working_backup.R before refactoring):
+  - Lines 664-665: Commented-out Tar1/Tar2 single-TF reactives (replaced by multi-TF tarfs())
+  - Lines 683-684: Commented-out old subgraph filter and trailing NA filter comment
+  - Lines 691-698: Commented-out concordantshared/discordantshared/concorrelation/
+    discorrelation/conftest/disftest reactives (old two-TF pairwise stats)
+  - Lines 703-709: trigger_motif_redraw reactiveVal and its observeEvent(input$tabs)
+    observer (watched a non-existent tab ID, never fired)
+  - Line 717: Commented-out shinyjs::delay wrapper opening around motifplot
+  - Line 726: Commented-out subpfms alternative filtering line in motifplot
+  - Line 841: Commented-out subcte$ID factor assignment (old row.names version)
+  - Line 921: Commented-out print(head(goout())) debug statement in gotable render
+  - Lines 962-968: Commented-out observeEvent(input$harmonyTable_rows_selected) block
+    and its "I don't remember if this is still used" comment
+  - Lines 988-993: Commented-out observeEvent(input$TF2) block (old two-TF slider update)
+  - Line 1014: Commented-out mygraph as_tbl_graph line in tfnetworkplot
+  - Lines 1016, 1037: Commented-out print(head(subnar)) and print(head(mygraph)) debug statements
+  - Lines 1030-1031: Commented-out V(mygraph)$group and V(mygraph)$value assignments
+  - Lines 1047-1048: Commented-out visGroups for Upregulated/Downregulated
+  - Line 1072: Commented-out t2test initialization
+  - Line 1075: Commented-out t2test append line
+  - Lines 1077-1078: Commented-out tf2ids alternative and print(t2test) debug
+  - Line 1092: Commented-out visEdges(arrows = "to") in networkplot
+  - Lines 1441-1447: Commented-out allcols/subfam/ycols/xcols color scheme experiments
+    in concordant heatmap
+  - Lines 1454, 1457: Commented-out print(head(subdtcon/subdtdis)) debug statements
+  - Line 1490: Commented-out geom_abline in concordant heatmap
+  - Line 1552: Commented-out geom_abline in discordant heatmap
+  - Lines 1684-1688: Commented-out pattern/subpwms alternatives in motifmat reactive
+  - Line 1697: Self-assignment motifmat <- compare_motifs(...), now returns directly
+  - Line 1719: Commented-out message("subnames:") debug line in motifdownclust
+  - Line 1739: Commented-out setkey(motifnar) in motif heatmap
+  - Line 1793: Commented-out subnar tstrsplit in regulators render
+
+Additional cleanup (current line numbers):
+  - Line 63: Removed unused `shared <- nrow(matched())` — called a reactive outside
+    reactive context and the result was never referenced anywhere in code.
+  - Lines 290, 297: Removed vestigial dataTableProxy and selectRows call for
+    harmonyTable. The proxy highlighted rows but the observer that acted on row
+    selection was already removed. The slider update in the same observer is kept.
+  - Lines 747, 757, 766: Removed self-assignments in motifhclust, motifupclust,
+    and motifdownclust reactives (e.g. `motifhclust <- hclust(...)` -> `hclust(...)`).
+    Reactives return their last expression, so the variable was unnecessary.
+  - Replaced `ids` table construction (originally lines 101-104) which scanned
+    filenames in Data/DEGS/ folder with `unique(narpv[, .(Ids = TF_ID, TF)])`.
+    Same mapping, derived from narpv instead of a fragile dependency on a folder
+    of individual DEG files. Updated in data_loading.R and preprocess_data.R.
+    As a result, the Data/DEGS/ folder is no longer referenced by any code in
+    the app. All DEG data is accessed through narpv. The folder can be safely
+    removed or archived.
+
+Bug fixes:
+  - Fixed NxTime splitLayout cellWidths summing to 120% (was "65%","55%").
+    Changed to "50%","50%".
+  - Fixed unsafe 1:length(Tar1) in matchtidy (helpers.R) which produced
+    c(1, 0) when Tar1 was empty. Replaced with seq_along() and added an
+    early return for fewer than 2 TFs.
+  - Fixed motifplot renderImage error handler: tryCatch caught errors but
+    returned nothing, causing renderImage to throw its own error. Replaced
+    with validate(need()) to show a clean message when no motifs match, and
+    removed the silent-fail tryCatch.
+  - Fixed gotable erroring with <2 TFs: DT::renderDT does not propagate
+    Shiny's silent reactive cancellation, so goout()$result threw an error.
+  - Fixed motif comparison erroring with 0 TFs: empty pattern caused
+    pfms[grepl(...)] to return an atomic vector. Added req(length(input$TFs) >= 1).
+  - Fixed deprecated ggplot2 size parameter in geom_smooth (harmonyplotly).
+    Changed to linewidth for ggplot2 3.4+.
+  - Fixed kbreaks selectInput returning character string instead of integer
+    for tanglegram k_branches/k_labels. Added as.integer() conversion.
+  - Fixed local variables shadowing reactive functions in tanglegram render:
+    motifupclust/motifdownclust locals renamed to muc/mdc.
+  - Removed vestigial self-assignment in subdt reactive (subdt <- dt[...]
+    inside the reactive named subdt). Same cleanup previously applied to
+    motifhclust/motifupclust/motifdownclust.
+
+Validation guards:
+  - Added validate(need()) to the three root reactives so users see clean
+    messages instead of red errors when inputs are insufficient:
+    - subdt(): "Select at least one TF or TF Family."
+    - subgraph() and matched(): "Select at least two TFs for pairwise analysis."
+    - targetsubnar(): "Select at least one target gene."
+  - These propagate silently to all downstream outputs in each panel.
+
+UI improvements:
+  - Added withSpinner() to Harmony Table (Global Analyses), Cell Type
+    Specificity (Pairwise Analyses), GO Terms plot, and GO Terms table.
+  - Added CSV download buttons (DT Buttons extension) to all five data
+    tables with descriptive filenames: pairwise_harmony, global_harmony,
+    GO_terms, target_DEGs, target_regulators.
+  - Switched Target Regulation tables (tfregdt, targetregdt) from
+    renderDataTable to DT::renderDT with DT::datatable() so the Buttons
+    extension works correctly.
+
+Performance:
+  - Added bindCache() to goout reactive (GO Terms API call), keyed on
+    sorted TF selection. Revisiting the GO tab with the same TFs returns
+    instantly from cache instead of re-hitting the GOST API.
+  - Added bindCache() to motifmat reactive (pairwise motif comparison),
+    keyed on sorted family selection and comparison method. Switching back
+    to a previously viewed family returns instantly from cache.
