@@ -6,23 +6,6 @@
 ## Global Analyses, Pairwise Analyses, and Target Regulation
 ## Then each of those panels has sub panels and figures.
 
-## Network layout choices reused across multiple inputs
-network_layouts <- c(
-  "layout_with_sugiyama",
-  "layout_on_sphere",
-  "layout_with_fr",
-  "layout_with_gem",
-  "layout_with_kk",
-  "layout_with_lgl",
-  "layout_with_mds",
-  "layout_in_circle",
-  "layout_nicely",
-  "layout_as_star",
-  "layout_as_tree",
-  "layout_on_grid",
-  "layout_with_dh"
-)
-
 ui <- navbarPage("Landscape of TF Harmony",
 
   tabPanel("Global Analyses",
@@ -152,7 +135,7 @@ ui <- navbarPage("Landscape of TF Harmony",
       ## Downside is that it takes forever to load if you try to show all the motifs at once
       ## Should probably be limited to like 5 tfs at a time or so
       tabPanel("Motif Dendrogram",
-        plotlyOutput(outputId = "motifdend", height = 1000) %>% withSpinner()
+        plotOutput(outputId = "motifdend", height = 1000) %>% withSpinner()
       )
     )
   ),
@@ -190,6 +173,7 @@ ui <- navbarPage("Landscape of TF Harmony",
       ## On-the-fly was picked so that users can upload their own DEG datasets and compare to ours
       tabPanel("TF x TF",
         splitLayout(
+          cellWidths = c("70%", "30%"),
           plotlyOutput(outputId = "harmonyplotly", height = "100%") %>% withSpinner(),
           DT::dataTableOutput("harmonyTable")
         )
@@ -198,8 +182,11 @@ ui <- navbarPage("Landscape of TF Harmony",
       ## More motif comparisons, but this time pairwise
       ## Idea being that you can see if a lot of shared regulation is associated with a similar motif
       tabPanel("Motif Comparison", value = "pairwisemotifs",
-        selectInput("motiftreestyle", label = "Tree Style:", choices = c("stack", "tree", "radialPhylog"), multiple = F),
-        imageOutput(outputId = "motifplot", width = "80%", height = 800) %>% withSpinner()
+        splitLayout(
+          cellWidths = c("60%", "40%"),
+          imageOutput(outputId = "motifplot", width = "100%", height = 800) %>% withSpinner(),
+          DT::DTOutput(outputId = "motifSimTable") %>% withSpinner()
+        )
       ),
 
       ## Are the shared DEGs expressed in a specific root cell type at baseline?
@@ -221,16 +208,14 @@ ui <- navbarPage("Landscape of TF Harmony",
       ## On the fly calculation of GO Terms using the GOST server
       ## Subsetted DEGs are submitted to the server at time of selection - runs even when page isn't selected
       tabPanel("GO Terms",
-        sliderInput(inputId = "goplotheight", min = 500, max = 10000, step = 100, value = 1000, label = "Plot height:"),
         fluidRow(
           column(6, plotlyOutput(outputId = "goplot", width = "100%", height = 1000) %>% withSpinner()),
           column(6, div(style = "overflow-x: auto;", DT::DTOutput(outputId = "gotable", width = "100%") %>% withSpinner()))
         )
       ),
 
-      ## Do the TFs also regulate one another, or do they just share DEGs
-      ## I can't remember if the color scheme was correct on this one, might need updating
-      ## Users can adjust the style of the network graph shown
+      ## TF Regulation - shows harmony edges between selected TFs
+      ## Module detection via Louvain, TFs as triangles with synonyms
       tabPanel("TF Regulation",
         inputPanel(
           sliderInput(
@@ -238,36 +223,18 @@ ui <- navbarPage("Landscape of TF Harmony",
             label = "Harmony Cutoff:",
             min = 0, max = 215000, value = 0,
             round = T, animate = T, width = 800
-          ),
-          selectInput(
-            inputId = "tfregnetworkstyle",
-            label = "Network Style:",
-            choices = network_layouts,
-            selected = "layout_with_sugiyama",
-            multiple = F
-          ),
-          ## Are we subsetting to only shared DEGs? ** TODO - check and see what this subsets?
-          checkboxInput(inputId = "networkdegs", label = "DEGs only:", value = TRUE)
+          )
         ),
         visNetworkOutput(outputId = "networkplot", height = 1000) %>% withSpinner()
       ),
 
-      ## Separate panel showing overlapping DEGs between TFs - harmony excluded
-      ## Idea here was whether we could see if we could identify the primary TF in cascading networks
-      ## Degree cutoff is to limit to targets that are downstream of a minimum number of TFs
-      ## ie. only keep a target if all 3 of my selected TFs regulate it
+      ## DEG Networks - shows TF->target DEG edges with harmony overlay
+      ## Module detection via Louvain, TFs as triangles, targets as boxes
       tabPanel("DEG Networks",
         inputPanel(
           numericInput(inputId = "tfregpcutoff", label = "Adjusted P-value Cutoff:", value = 0.05, min = 0, max = 1, step = 0.01),
-          numericInput(inputId = "tfreglfccutoff", label = "Log2FoldChange Cutoff:", value = 0, min = 0, step = 0.1),
-          numericInput(inputId = "tfdegreecutoff", label = "Degree Cutoff:", value = 0, min = 0, step = 1),
-          selectInput(
-            inputId = "degnetworkstyle",
-            label = "Network Style:",
-            choices = network_layouts,
-            selected = "layout_with_sugiyama",
-            multiple = F
-          )
+          numericInput(inputId = "tfreglfccutoff", label = "Log2FoldChange Cutoff:", value = 2, min = 0, step = 0.1),
+          numericInput(inputId = "tfdegreecutoff", label = "Degree Cutoff:", value = 2, min = 0, step = 1)
         ),
         visNetworkOutput(outputId = "tfnetworkplot", height = 1000) %>% withSpinner()
       )
@@ -282,15 +249,9 @@ ui <- navbarPage("Landscape of TF Harmony",
   tabPanel("Target Regulation",
     inputPanel(
       fileInput(inputId = "targetupload", label = "Upload list of Targets"),
-      numericInput(inputId = "regpcutoff", label = "Adjusted P-value Cutoff:", value = 0.05, min = 0, max = 1, step = 0.01),
-      numericInput(inputId = "reglfccutoff", label = "Log2FoldChange Cutoff:", value = 0, min = 0, step = 0.1),
-      selectInput(
-        inputId = "targetnetworkstyle",
-        label = "Network Style:",
-        choices = network_layouts,
-        selected = "layout_with_sugiyama",
-        multiple = F
-      )
+      textInput(inputId = "regpcutoff", label = "Adjusted P-value Cutoff:", value = "0.05"),
+      textInput(inputId = "reglfccutoff", label = "Log2FoldChange Cutoff:", value = "0"),
+      textInput(inputId = "networkhcutoff", label = "Harmony Cutoff:", value = "0.5")
     ),
 
     ## This is where the list of all targets from NarPV is used
@@ -303,12 +264,41 @@ ui <- navbarPage("Landscape of TF Harmony",
       width = "100%"
     ),
 
-    splitLayout(
-      visNetworkOutput(outputId = "regulators", width = "50%", height = 1000) %>% withSpinner(),
-      verticalLayout(
-        DT::DTOutput(outputId = "tfregdt", height = 500, width = "50%"),
-        DT::DTOutput(outputId = "targetregdt", height = 500, width = "50%")
+    fluidRow(
+      column(12,
+        plotOutput("tfHarmonyScatter", height = "350px")
       )
+    ),
+    fluidRow(
+      column(2,
+        selectInput("module_select", "Select module", choices = "All", selected = "All")
+      ),
+      column(2,
+        sliderInput(inputId = "harmtrans", label = "Harmony Transparency:", min = 0, max = 1, value = 0.25, step = 0.05, ticks = FALSE)
+      ),
+      column(4,
+        sliderInput(inputId = "logtrans", label = "Log2FC Transparency:", min = 0, max = 1, value = 1, step = 0.05, ticks = FALSE)
+      ),
+      column(2,
+        selectInput("louvain_weight_mode", "Module definition",
+          choices = c(
+            "Absolute Harmony" = "abs_harmony",
+            "Absolute Harmony squared" = "abs_harmony_sq",
+            "Concordant Harmony" = "concordant",
+            "Discordant Harmony" = "discordant"
+          ),
+          selected = "abs_harmony"
+        )
+      )
+    ),
+
+    fluidRow(
+      column(12,
+        visNetworkOutput("regulators", height = "850px") %>% withSpinner()
+      )
+    ),
+    fluidRow(
+      plotOutput("targetRegHeatmap", height = "700px") %>% withSpinner()
     ),
 
     includeCSS("www/style.css")

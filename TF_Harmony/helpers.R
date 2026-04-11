@@ -72,6 +72,43 @@ harmony_hclust <- function(subdt, harmony_type, transpose = FALSE,
   hclust(d, method = clust_method)
 }
 
+## Louvain community detection on a harmony edge table.
+## h: data.table with TF1_ID, TF2_ID, and one or more weight columns
+## weight_col: which column to use as edge weight
+## cutoff: minimum weight to keep an edge
+## Returns a data.table with TF_ID and module columns, or NULL if no edges pass the cutoff.
+compute_louvain_modules <- function(h, weight_col = "weight", cutoff = 0.02) {
+  h <- copy(h)
+  h <- h[!is.na(get(weight_col)) & get(weight_col) >= cutoff]
+
+  if (nrow(h) == 0) return(NULL)
+
+  h[, pair_id := ifelse(
+    TF1_ID < TF2_ID,
+    paste(TF1_ID, TF2_ID, sep = "__"),
+    paste(TF2_ID, TF1_ID, sep = "__")
+  )]
+
+  h <- h[, .(
+    TF1_ID = first(TF1_ID),
+    TF2_ID = first(TF2_ID),
+    weight = max(get(weight_col), na.rm = TRUE)
+  ), by = pair_id]
+
+  g_mod <- igraph::graph_from_data_frame(
+    d = h[, .(from = TF1_ID, to = TF2_ID, weight)],
+    directed = FALSE
+  )
+
+  cl <- igraph::cluster_louvain(g_mod, weights = igraph::E(g_mod)$weight)
+  memb <- igraph::membership(cl)
+
+  data.table(
+    TF_ID = names(memb),
+    module = as.integer(memb)
+  )
+}
+
 ## Given multiple differential-expression result tables, compare every pair by merging on gene id, then tag each gene as
 ## concordant/discordant in direction of effect, caching previous pair computations if provided.
 matchtidy <- function(Tar1, oldmatch = data.table()) {

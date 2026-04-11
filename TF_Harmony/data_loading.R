@@ -3,10 +3,6 @@
 # If the RDS files don't exist, falls back to reading raw TSVs and processing inline.
 # Run `Rscript preprocess_data.R` once to generate the RDS files.
 
-## Color scheme for network graphs overlaying activator/repressor data with TF activity
-testcolors <- c("red", "gray", "blue", "gray", "darkred", "darkblue")
-names(testcolors) <- c("Activator", "Minimally Active", "Repressor", "Unknown", "Upregulated", "Downregulated")
-
 ## Pre-calculated harmony data with family annotations, exp17 removed, names cleaned
 dt <- readRDS("Data/dt.rds")
 ## TF family lookup table
@@ -20,14 +16,6 @@ narpv <- readRDS("Data/narpv.rds")
 allgeneids <- readRDS("Data/allgeneids.rds")
 ## Ordered unique TF names from DEGs
 idoptions <- readRDS("Data/idoptions.rds")
-## TF ID to TF name mapping, derived from narpv
-ids <- readRDS("Data/ids.rds")
-
-## Known transcription effector domains
-allteds <- readRDS("Data/allteds.rds")
-## Pre-built vertices for network graphs with shapes assigned
-vertices <- readRDS("Data/vertices.rds")
-
 ## PWMs for motif sorting and PFMs for motifStack
 pwms <- readRDS("Data/pwms_processed.rds")
 pfms <- readRDS("Data/pfms.rds")
