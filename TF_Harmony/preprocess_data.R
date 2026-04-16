@@ -27,6 +27,10 @@ setnames(dt,
     "Concordant_Correlation", "Discordant_Correlation",
     "Concordant_Harmony", "Discordant_Harmony"))
 
+## Signed Harmony score
+setDT(dt)
+dt[, Harmony := Concordant_Harmony - Discordant_Harmony]
+
 dt <- dt[!(TF1 == TF2)]
 dt[, TF1 := sub("-.*", "", TF1)]
 dt[, TF2 := sub("-.*", "", TF2)]

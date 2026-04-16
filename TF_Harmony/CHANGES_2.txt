@@ -1,0 +1,92 @@
+CHANGES_2.txt - Session 2 (April 2026)
+
+OUTSTANDING ITEMS (from Kirk's email)
+- Tanglegram MSA: blocked on Kirk/Tim providing a better MSA file.
+- Cell Type Specificity column order: clustered for now, needs Kirk/Tim
+  input on a fixed biological tissue ordering.
+- Tim's multiple motifs per TF: blocked on new motif data files.
+- Leiden modules: Louvain is in as prototype. Leiden needs leidenAlg
+  package (Python/reticulate dependency). One-line swap when ready.
+- Motif heatmap tick colors: working but imperfect (drift on zoom).
+- Motif dendrogram: colored labels but lost interactivity.
+- qs2 serialization: Kirk suggested replacing RDS with qs2 for faster
+  load times. Easy to test, low priority.
+- Harmony table parquet: Kirk suggested parquet for partial loading.
+  Low priority, loading is acceptable.
+- GO terms local computation: Kirk prefers GOST server results. Optional.
+- User data upload and harmony recalculation: conceptual, not yet scoped.
+
+---
+
+Target Regulation
+- Integrated Kirk's March 24 rewrite: scatter plot, Louvain modules, heatmap, new network
+- Removed old regulators network, tfregdt, targetregdt, subvs(), targetnetworkstyle
+- Added compute_louvain_modules() to helpers.R
+- Added signed Harmony column to preprocess_data.R
+- Added library(ggrepel)
+- Fixed duplicate node IDs crash when a target is also a TF
+
+Pairwise - TF x TF
+- Table width 50% -> 30%
+
+Pairwise - Motif Comparison
+- Removed tree style dropdown, default to "tree"
+- Added motif similarity table (ALLR_LL) beside the tree
+- Increased motif tree SVG height
+- Tim's multiple motifs per TF idea: current data only has _up and _down per TF.
+  Needs new motif data files to implement. Once added, can add a top-N dropdown.
+
+Pairwise - Cell Type Specificity
+- Added column (tissue) clustering in addition to existing row (gene) clustering.
+  Columns were previously alphabetical. Clustering groups similar cell types but
+  still not ideal — a fixed biological order (e.g. radial root layers) would
+  probably look better. Needs Kirk/Tim input on preferred tissue ordering.
+
+Pairwise - NxTime Overlay
+- Rows now ordered by p-value instead of JIT bin (both root and shoot).
+
+Pairwise - GO Terms
+- Removed separate goplotheight slider from GO Terms subtab.
+  GO plot now uses the shared harmonyplotheight slider from the top input panel.
+
+Pairwise - TF Regulation
+- Rewrote to use visNetwork directly instead of visIgraph/tbl_graph.
+- TFs shown as module-colored triangles with synonym labels.
+- Louvain module detection on harmony between selected TFs.
+- Concordant edges red (solid), discordant edges blue (dashed).
+- Removed network style dropdown and DEGs-only checkbox.
+
+Pairwise - DEG Networks
+- Rewrote to use visNetwork directly instead of visIgraph with vertices.
+- TFs as module-colored triangles, targets as boxes.
+- Louvain module detection on selected TFs via harmony.
+- Edge width by log2FC, color by regulation direction.
+- Default cutoffs raised: log2FC 0->2, degree 0->2 to fix severe
+  performance issues. Previously loaded thousands of nodes/edges.
+- Removed network style dropdown.
+
+Dead code removed
+- testcolors, vertices, ids, allteds from data_loading.R
+- network_layouts from ui.R
+- library(ggraph) and library(tidygraph) — no longer used anywhere.
+
+Louvain module detection
+- Now active in all three network tabs (Target Regulation, TF Regulation,
+  DEG Networks). All use compute_louvain_modules() from helpers.R.
+- Leiden is the end goal but requires leidenAlg/reticulate. Louvain is
+  the prototype. Swap is a one-line change when ready.
+
+Global - Motif Heatmap
+- Axis labels colored red (up) / blue (down) via HTML spans in plotly ticktext.
+  Keeps interactivity (hover/zoom). Workaround for plotly not supporting
+  per-tick colors natively — not perfect, tick alignment can drift on zoom.
+
+Global - Motif Dendrogram
+- Switched from ggplotly to static plot with dendextend for label coloring.
+  Labels colored red (up) / blue (down). Lost interactivity — plotly strips
+  dendextend colors. Kirk had the same issue previously.
+
+Tanglegram
+- No code changes. Blocked on Kirk/Tim providing a better MSA file to
+  replace the current msa.fa (low quality, few bootstraps). Phytozome
+  or Tim's MSA are options. Once replaced, just rerun preprocess_data.R.
