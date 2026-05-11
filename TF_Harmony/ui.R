@@ -75,17 +75,6 @@ ui <- navbarPage("Landscape of TF Harmony",
       ),
 
       ## Second tab under Global Analyses
-      ## Graphs look at prevalence of family interaction
-      ## Honestly these didn't seem all that effective to me
-      ## They'll likely be removed
-      tabPanel("Family Harmony",
-        splitLayout(
-          plotlyOutput(outputId = "relationships", height = 1000) %>% withSpinner(),
-          visNetworkOutput(outputId = "familyproportion", height = 1000) %>% withSpinner()
-        )
-      ),
-
-      ## Third tab under Global Analyses
       ## Allows the user to select their inputs and compare dendrograms - highlighting similarities
       ## Concordant / Discordant are harmony dendrograms
       ## Phylogeny is a pre-computed MSA that is trimmed based on user selections
@@ -154,8 +143,13 @@ ui <- navbarPage("Landscape of TF Harmony",
         selected = idoptions[1:2],
         options = list(maxItems = 10)
       ),
-      ## The idea here is that you can read in a list of TFs from your own project and see their defined harmony
-      fileInput(inputId = "tfupload", label = "Upload list of TFs"),
+      ## Upload restricts the dropdown to just the uploaded TFs (first 2 pre-selected)
+      ## Clear button restores the full TF list and resets the file input display
+      div(
+        uiOutput("tfupload_ui"),
+        actionButton(inputId = "tfupload_clear", label = "Clear upload",
+                     style = "margin-top: -10px;")
+      ),
       ## Users can adjust size of pairwise harmony plot
       sliderInput(
         inputId = "harmonyplotheight",
@@ -215,7 +209,7 @@ ui <- navbarPage("Landscape of TF Harmony",
       ),
 
       ## TF Regulation - shows harmony edges between selected TFs
-      ## Module detection via Louvain, TFs as triangles with synonyms
+      ## Module detection via Leiden, TFs as triangles with synonyms
       tabPanel("TF Regulation",
         inputPanel(
           sliderInput(
@@ -229,7 +223,7 @@ ui <- navbarPage("Landscape of TF Harmony",
       ),
 
       ## DEG Networks - shows TF->target DEG edges with harmony overlay
-      ## Module detection via Louvain, TFs as triangles, targets as boxes
+      ## Module detection via Leiden, TFs as triangles, targets as boxes
       tabPanel("DEG Networks",
         inputPanel(
           numericInput(inputId = "tfregpcutoff", label = "Adjusted P-value Cutoff:", value = 0.05, min = 0, max = 1, step = 0.01),
@@ -248,11 +242,20 @@ ui <- navbarPage("Landscape of TF Harmony",
   ## that regulate those targets.
   tabPanel("Target Regulation",
     inputPanel(
-      fileInput(inputId = "targetupload", label = "Upload list of Targets"),
+      ## Upload pre-selects target genes; 2-col upload enables similarity scoring.
+      ## Clear button resets the file input display, clears the selection, and disables similarity.
+      div(
+        uiOutput("targetupload_ui"),
+        actionButton(inputId = "targetupload_clear", label = "Clear upload",
+                     style = "margin-top: -10px;")
+      ),
       textInput(inputId = "regpcutoff", label = "Adjusted P-value Cutoff:", value = "0.05"),
       textInput(inputId = "reglfccutoff", label = "Log2FoldChange Cutoff:", value = "0"),
       textInput(inputId = "networkhcutoff", label = "Harmony Cutoff:", value = "0.5")
     ),
+
+    ## Upload status message
+    textOutput("uploadStatus"),
 
     ## This is where the list of all targets from NarPV is used
     ## Server-side selectize for performance with large gene list
@@ -280,7 +283,7 @@ ui <- navbarPage("Landscape of TF Harmony",
         sliderInput(inputId = "logtrans", label = "Log2FC Transparency:", min = 0, max = 1, value = 1, step = 0.05, ticks = FALSE)
       ),
       column(2,
-        selectInput("louvain_weight_mode", "Module definition",
+        selectInput("module_weight_mode", "Module definition",
           choices = c(
             "Absolute Harmony" = "abs_harmony",
             "Absolute Harmony squared" = "abs_harmony_sq",
@@ -288,6 +291,19 @@ ui <- navbarPage("Landscape of TF Harmony",
             "Discordant Harmony" = "discordant"
           ),
           selected = "abs_harmony"
+        )
+      ),
+      column(2,
+        ## Defaults to Precomputed (global) — auto-switches to Recalculated on upload.
+        ## Recalculated = Kirk's preferred behavior: harmony computed on the fly
+        ## using subset-proportion NP (denominator = TF's DEGs within the upload).
+        ## Precomputed = the original behavior: subset the global harmony table.
+        selectInput("harmony_source", "Harmony source",
+          choices = c(
+            "Recalculated (subset)" = "recalc",
+            "Precomputed (global)" = "global"
+          ),
+          selected = "global"
         )
       )
     ),
@@ -297,8 +313,12 @@ ui <- navbarPage("Landscape of TF Harmony",
         visNetworkOutput("regulators", height = "850px") %>% withSpinner()
       )
     ),
+
+    ## TF similarity ranking table (only visible with 2-column upload)
     fluidRow(
-      plotOutput("targetRegHeatmap", height = "700px") %>% withSpinner()
+      column(12,
+        DT::DTOutput("similarityTable") %>% withSpinner()
+      )
     ),
 
     includeCSS("www/style.css")

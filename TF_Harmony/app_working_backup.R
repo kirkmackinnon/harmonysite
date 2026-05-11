@@ -29,10 +29,14 @@ source("ui.R", local = TRUE)
 ## Helper functions (Fisher test, DEG lookup, pairwise matching)
 source("helpers.R", local = TRUE)
 
-# Define server logic 
+# Define server logic
 ## Backend computation
   server <- function(input, output, session) {
-  
+
+  ## Null-coalescing helper (R doesn't have one natively). Used to provide
+  ## a safe default when an input might be NULL before its UI element mounts.
+  `%||%` <- function(a, b) if (is.null(a)) b else a
+
   ## Multi-TF DEG lookup. selectize input limited to TF ids
   ## findfile was refactored to use the for loop and cycle through for as many tfs as needed. 
   ## Uses NarPV to calculate overlapping DEGs on the fly.
@@ -188,7 +192,7 @@ source("helpers.R", local = TRUE)
       subcte[, Mean := mean(TPM), by = .(`Gene ID`, Group)][, Scaled := scale(Mean), by = `Gene ID`]
       subcte <- unique(subcte[, .(Tissue = `short name`, ID = `Gene ID`, Scaled = Scaled, Name = `long name`)])
       
-      ## Clustering rows (genes) and columns (tissues):
+      ## Clustering rows (genes) only — columns (tissues) stay in default order
       # convert narrow data to matrix using scaled values
       submat <- as.matrix(dcast.data.table(subcte, ID ~ Tissue, value.var = "Scaled"), rownames = "ID")
       # only use rows without NAs
@@ -196,9 +200,6 @@ source("helpers.R", local = TRUE)
       # Cluster rows (genes)
       row_fit <- hclust(dist(submat), method = "complete")
       subcte$ID <- factor(subcte$ID, levels = row_fit$labels[row_fit$order], ordered = T)
-      # Cluster columns (tissues)
-      col_fit <- hclust(dist(t(submat)), method = "complete")
-      subcte$Tissue <- factor(subcte$Tissue, levels = col_fit$labels[col_fit$order], ordered = T)
       
       hm <- ggplot(subcte, aes(x = Tissue, y = ID, fill = Scaled, text = Name)) + 
         geom_raster() + 
@@ -220,8 +221,8 @@ source("helpers.R", local = TRUE)
     
     output$nxtplot1 <- renderPlotly({
       subjitr <- jitr[GeneID %in% matched()$rn]
-      
-      subjitr$GeneID <- factor(subjitr$GeneID, levels = subjitr[order(pvalue), GeneID])
+
+      subjitr$GeneID <- factor(subjitr$GeneID, levels = subjitr[order(JIT), GeneID])
       
       hm <- ggplot(subjitr, aes(x = JIT, y = GeneID, fill = pvalue)) + 
         geom_raster() + 
@@ -240,8 +241,8 @@ source("helpers.R", local = TRUE)
     ## Same thing as nxtplot1 except its doing it for Shoot data now
     output$nxtplot2 <- renderPlotly({
       subjits <- jits[GeneID %in% matched()$rn]
-      
-      subjits$GeneID <- factor(subjits$GeneID, levels = subjits[order(pvalue), GeneID])
+
+      subjits$GeneID <- factor(subjits$GeneID, levels = subjits[order(JIT), GeneID])
       
       hs <- ggplot(subjits, aes(x = JIT, y = GeneID, fill = pvalue)) +
         geom_raster() +
@@ -310,41 +311,156 @@ source("helpers.R", local = TRUE)
     ## (previously forced on every load via suspendWhenHidden = FALSE)
     
     
+    ## Render the file input dynamically so it can be reset on "Clear upload".
+    ## Bumping tfupload_reset triggers a fresh render, clearing the file-name display.
+    tfupload_reset <- reactiveVal(0)
+    output$tfupload_ui <- renderUI({
+      tfupload_reset()
+      fileInput(inputId = "tfupload", label = "Upload list of TFs")
+    })
+
     ## User input - list of TFs to upload
     ## App watches for tfs then reads in the data
     ## Then updates the selectInput "TFs" based on the new data
     ## Pairwise Analyses
+    ## Accepts either TF synonyms (e.g. "ABF3") or AT IDs (e.g. "AT4G34000").
+    ## AT IDs are translated to synonyms via the narpv TF_ID -> TF lookup.
+    ## Upload restricts the dropdown to just the uploaded TFs and pre-selects the first 2.
+    ## "Clear upload" button restores the full TF list.
     observeEvent(input$tfupload, {
       file <- input$tfupload
-      fdt <- fread(file$datapath, header = F)
-      
-      updateSelectInput(
+      fdt <- fread(file$datapath, header = TRUE)
+
+      tf_lk <- unique(narpv[, .(TF_ID, TF)])
+      first_val <- fdt[[1]][1]
+      if (!(first_val %in% idoptions) && !(first_val %in% tf_lk$TF_ID)) {
+        fdt <- fread(file$datapath, header = FALSE)
+      }
+
+      uploaded <- as.character(fdt[[1]])
+
+      ## Direct synonym matches preserve upload order
+      hit_synonyms <- uploaded[uploaded %in% idoptions]
+
+      ## AT IDs in upload → translate to synonyms (preserve order)
+      hit_atids <- uploaded[uploaded %in% tf_lk$TF_ID]
+      translated <- tf_lk[match(hit_atids, TF_ID), TF]
+      translated <- translated[!is.na(translated) & translated %in% idoptions]
+
+      ## Combine preserving upload order, dedup
+      ordered_tfs <- unique(c(hit_synonyms, translated))
+
+      if (length(ordered_tfs) == 0) {
+        ## Nothing matched — leave the unrestricted dropdown alone
+        return()
+      }
+
+      selected_tfs <- head(ordered_tfs, 2)
+
+      updateSelectizeInput(
+        session = session,
+        inputId = "TFs",
+        choices = ordered_tfs,
+        selected = selected_tfs
+      )
+    })
+
+    ## Clear upload restriction: restore full TF list, keep current selection where valid,
+    ## and re-render the file input so the file name / "Upload complete" status disappears.
+    observeEvent(input$tfupload_clear, {
+      keep <- intersect(input$TFs, idoptions)
+      if (length(keep) == 0) keep <- idoptions[1:2]
+      updateSelectizeInput(
         session = session,
         inputId = "TFs",
         choices = idoptions,
-        selected = fdt[V1 %in% idoptions, V1]
+        selected = keep
       )
+      tfupload_reset(tfupload_reset() + 1)
     })
     
     ## Populate allgenes selectize server-side for performance with large gene list
     updateSelectizeInput(session, "allgenes", choices = allgeneids, selected = allgeneids[1], server = TRUE)
 
+    ## Store user-uploaded log2FC values (2-column upload) and upload status message
+    user_lfc <- reactiveVal(NULL)
+    upload_status <- reactiveVal(NULL)
+
+    ## Render the target upload file input dynamically so it can be reset on "Clear upload".
+    ## Bumping targetupload_reset triggers a fresh render, clearing the file-name display.
+    targetupload_reset <- reactiveVal(0)
+    output$targetupload_ui <- renderUI({
+      targetupload_reset()
+      fileInput(inputId = "targetupload", label = "Upload list of Targets")
+    })
+
     ## User option to upload a list of targets
     ## Target regulation
-    ## Updates selectInput to match upload
+    ## Detects 1-column (gene IDs only) or 2-column (gene IDs + log2FC) uploads
+    ## Updates selectInput to match upload; stores log2FC if provided
     observeEvent(input$targetupload, {
       file <- input$targetupload
-      fdt <- fread(file$datapath, header = F)
+      fdt <- fread(file$datapath, header = TRUE)
+
+      ## Fall back to headerless read if first column doesn't look like an AT ID
+      if (!grepl("^AT[0-9]G", fdt[[1]][1])) {
+        fdt <- fread(file$datapath, header = FALSE)
+      }
+
+      gene_col <- names(fdt)[1]
+      matched_ids <- fdt[[gene_col]][fdt[[gene_col]] %in% allgeneids]
+
+      if (ncol(fdt) >= 2 && is.numeric(fdt[[2]])) {
+        ## 2-column upload: gene IDs + log2FC
+        lfc_col <- names(fdt)[2]
+        lfc_dt <- data.table(rn = fdt[[gene_col]], user_log2FC = as.numeric(fdt[[lfc_col]]))
+        lfc_dt <- lfc_dt[rn %in% allgeneids & !is.na(user_log2FC)]
+        user_lfc(lfc_dt)
+        upload_status(paste0(
+          "Uploaded ", nrow(fdt), " genes (",
+          length(matched_ids), " matched, ",
+          nrow(lfc_dt), " with log2FC). ",
+          "Similarity scores enabled."
+        ))
+      } else {
+        ## 1-column upload: gene IDs only
+        user_lfc(NULL)
+        upload_status(paste0(
+          "Uploaded ", nrow(fdt), " genes (",
+          length(matched_ids), " matched). ",
+          "Upload 2 columns (GeneID, log2FC) to enable similarity scoring."
+        ))
+      }
 
       updateSelectizeInput(
         session = session,
         inputId = "allgenes",
         choices = allgeneids,
-        selected = fdt[V1 %in% allgeneids, V1],
+        selected = matched_ids,
         server = TRUE
       )
+
+      ## On upload, switch to recalculated harmony (Kirk's preferred behavior)
+      updateSelectInput(session, "harmony_source", selected = "recalc")
     })
-    
+
+    ## Clear target upload: reset file input display, clear gene selection,
+    ## clear stored user log2FC, clear the status message, and revert harmony
+    ## source back to the precomputed global table.
+    observeEvent(input$targetupload_clear, {
+      user_lfc(NULL)
+      upload_status(NULL)
+      updateSelectizeInput(
+        session = session,
+        inputId = "allgenes",
+        choices = allgeneids,
+        selected = character(0),
+        server = TRUE
+      )
+      updateSelectInput(session, "harmony_source", selected = "global")
+      targetupload_reset(targetupload_reset() + 1)
+    })
+
     ## For the harmony cutoff user input
     ## The slider is updated automatically to use the table minimum and maximum as the extreme values
     observeEvent(input$TFs, {
@@ -357,7 +473,7 @@ source("helpers.R", local = TRUE)
     
     ## DEG Networks - shows TF->target edges for selected TFs
     ## TFs as module-colored triangles with synonyms, targets as boxes
-    ## Louvain module detection on harmony between the selected TFs
+    ## Leiden module detection on harmony between the selected TFs
     output$tfnetworkplot <- renderVisNetwork({
       req(length(input$TFs) >= 1)
 
@@ -383,7 +499,8 @@ source("helpers.R", local = TRUE)
 
         h_sub <- h[TF1_ID %in% hit_tf_ids & TF2_ID %in% hit_tf_ids & TF1_ID != TF2_ID,
                    .(TF1_ID, TF2_ID, abs_harmony)]
-        mods <- compute_louvain_modules(h_sub, weight_col = "abs_harmony", cutoff = 0.02)
+        mods <- compute_modules(h_sub, weight_col = "abs_harmony", cutoff = 0.02,
+                                method = "leiden")
         if (is.null(mods)) mods <- data.table(TF_ID = hit_tf_ids, module = seq_along(hit_tf_ids))
       } else {
         mods <- data.table(TF_ID = hit_tf_ids, module = 1L)
@@ -467,7 +584,8 @@ source("helpers.R", local = TRUE)
 
         h_sub <- h[TF1_ID %in% tf_info$TF_ID & TF2_ID %in% tf_info$TF_ID & TF1_ID != TF2_ID,
                    .(TF1_ID, TF2_ID, abs_harmony)]
-        mods <- compute_louvain_modules(h_sub, weight_col = "abs_harmony", cutoff = 0.02)
+        mods <- compute_modules(h_sub, weight_col = "abs_harmony", cutoff = 0.02,
+                                method = "leiden")
         if (is.null(mods)) mods <- data.table(TF_ID = tf_info$TF_ID, module = seq_along(tf_info$TF_ID))
       } else {
         mods <- data.table(TF_ID = tf_info$TF_ID, module = 1L)
@@ -541,134 +659,6 @@ source("helpers.R", local = TRUE)
         geom_line(aes(group = rn), color = "black", alpha = 0.25)
         
        ggplotly(p, height = input$harmonyplotheight)
-    })
-    
-    ## This is the second tab under Global Analyses
-    ## Family Harmony
-    ## The idea was to show harmony relationships but color coded by family to look for patterns
-    ## starts by subsetting the harmony datatable based on user tf family inputs
-    ## removes rows with NA harmony and subsets further based on user cutoffs
-    ## 
-    
-    output$relationships <- renderPlotly({
-      subdt <- subdt()[, .(TF1, TF2, Concordant_Harmony, Discordant_Harmony, TF1_Family, TF2_Family)]
-      subdt <- subdt[!(is.na(Discordant_Harmony)) &
-                       (abs(Discordant_Harmony) >= as.numeric(input$familyharmonycutoff))]
-      subdt <- subdt[!(is.na(Concordant_Harmony)) &
-                       (abs(Concordant_Harmony) >= as.numeric(input$familyharmonycutoff))]
-
-      ## Defining a new column called interaction which is used to color the points
-      ## This is a unique identifier for which families are interacting 
-      ## this step is used so TF1-MYB <-> TF2-bZIP is treated the same as TF1-bZIP <-> TF2-MYB 
-      subdt[, Interaction := paste(pmin(TF1_Family, TF2_Family), pmax(TF1_Family, TF2_Family), sep = ".")]
-      
-      ## Scatter plot of Harmony values - discordant shown as negatives
-      ## colored by family interaction
-      ## Text overlay in plotly of the TF ids
-      p <- ggplot(subdt, 
-                  aes(
-                    x = Concordant_Harmony, 
-                    y = Discordant_Harmony * (-1), 
-                    text = interaction(TF1, TF2), 
-                    color = factor(Interaction))) + 
-        geom_point(size = 2) + 
-        theme(
-          legend.position = "none"
-        )
-      ggplotly(p)
-    })
-    
-    ## Network graph calculating proportionality of one family interacting with another family
-    ## Starts with subsetting and user cutoffs
-    ## Calculates the mean concordant/discordant harmony of one family with another
-    ## Sums the total harmony by family
-    ## Then divides the mean by the total to calculate proportion for each family interaction
-    ## Then starts creating the graph structure, manually defining edges and ensuring they're directional
-    output$familyproportion <- renderVisNetwork({
-      subdt <- subdt()[, .(TF1, TF2, Concordant_Harmony, Discordant_Harmony, TF1_Family, TF2_Family)]
-      subdt <- subdt[!(is.na(Discordant_Harmony)) &
-                       (abs(Discordant_Harmony) >= as.numeric(input$familyharmonycutoff))]
-      subdt <- subdt[!(is.na(Concordant_Harmony)) &
-                       (abs(Concordant_Harmony) >= as.numeric(input$familyharmonycutoff))]
-      subdt[, Interaction := paste(pmin(TF1_Family, TF2_Family),
-                                   pmax(TF1_Family, TF2_Family),
-                                   sep = ".")]
-      
-      family_harmony <- subdt[, .(
-        mean_H_concordant = mean(Concordant_Harmony, na.rm = TRUE),
-        mean_H_discordant = mean(Discordant_Harmony, na.rm = TRUE),
-        n_interactions = .N
-      ), by = .(TF1_Family, TF2_Family)]
-      
-      # Normalize concordant harmony
-      family_harmony[, total_H_concordant := sum(mean_H_concordant, na.rm = TRUE), by = TF1_Family]
-      family_harmony[, prop_H_concordant := mean_H_concordant / total_H_concordant]
-      
-      
-      # Normalize discordant harmony (optional)
-      family_harmony[, total_H_discordant := sum(mean_H_discordant, na.rm = TRUE), by = TF1_Family]
-      family_harmony[, prop_H_discordant := mean_H_discordant / total_H_discordant]
-      
-      # -------------------------
-      # 1. Define Harmony edges
-      # -------------------------
-      # Concordant edges: Family1 → Family2
-      edges_concordant <- family_harmony[mean_H_concordant > 0, .(
-        from = TF1_Family,
-        to = TF2_Family,
-        value = mean_H_concordant * 10,
-        arrows = "to",
-        color = "blue",
-        title = paste0("Concordant Harmony: ", round(mean_H_concordant, 3))
-      )]
-      
-      # Discordant edges: Family2 → Family1 (reversed direction)
-      edges_discordant <- family_harmony[mean_H_discordant > 0, .(
-        from = TF2_Family,
-        to = TF1_Family,
-        value = mean_H_discordant * 10,
-        arrows = "to",
-        color = "red",
-        title = paste0("Discordant Harmony: ", round(mean_H_discordant, 3))
-      )]
-      
-      # Combine both directions
-      edges <- rbind(edges_concordant, edges_discordant)
-      
-  
-      # -------------------------
-      # 3. Build nodes table with coordinates
-      # -------------------------
-      # All unique family names
-      all_families <- unique(c(edges$from, edges$to))
-      
-      # Build node table
-      nodes <- data.table(
-        id = all_families,
-        label = all_families
-      )
-      
-      
-      # Create igraph object
-      g <- graph_from_data_frame(edges[, .(from, to)], directed = TRUE)
-
-      # Sugiyama layout with vertical stretch
-      sugiyama_layout <- layout_with_sugiyama(g)$layout
-
-      nodes[, x := sugiyama_layout[, 1] * 70]
-      nodes[, y := -sugiyama_layout[, 2] * 1500]
-
-      # -------------------------
-      # 4. Plot in visNetwork
-      # -------------------------
-      visNetwork(nodes, edges) %>%
-        visNodes(shape = "dot", size = 25, fixed = FALSE) %>%
-        visEdges(smooth = TRUE) %>%
-        visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
-        visInteraction(navigationButtons = TRUE) %>%
-        visPhysics(enabled = FALSE)
-      
-      
     })
     
     ## Reactive objects to calculate harmony clustering for heatmaps and tanglegrams.
@@ -958,16 +948,81 @@ source("helpers.R", local = TRUE)
     narpv[rn %in% input$allgenes][padj < padjcutoff][abs(log2FoldChange) > l2fccutoff]
   })
 
+  ## Upload status message
+  output$uploadStatus <- renderText({
+    upload_status()
+  })
+
+  ## Per-TF similarity to user-uploaded log2FC data
+  ## For each TF that regulates the selected targets, merges user log2FC with TARGET log2FC
+  ## and computes Pearson correlation + number of overlapping genes
+  user_tf_similarity <- reactive({
+    ulfc <- user_lfc()
+    if (is.null(ulfc) || nrow(ulfc) == 0) return(NULL)
+
+    subnar <- targetsubnar()
+    req(nrow(subnar) > 0)
+
+    ## Merge TARGET log2FC with user log2FC per TF
+    merged <- merge(subnar[, .(TF_ID, TF, rn, target_l2fc = log2FoldChange)],
+                    ulfc, by = "rn", all = FALSE)
+
+    if (nrow(merged) == 0) return(NULL)
+
+    ## Per-TF correlation between user and TARGET log2FC
+    sim <- merged[, {
+      n_overlap <- .N
+      if (n_overlap >= 3) {
+        r <- cor(target_l2fc, user_log2FC, method = "pearson", use = "complete.obs")
+      } else {
+        r <- NA_real_
+      }
+      .(TF = first(TF), similarity = round(r, 4), n_shared = n_overlap,
+        mean_target_l2fc = round(mean(target_l2fc, na.rm = TRUE), 4),
+        mean_user_l2fc = round(mean(user_log2FC, na.rm = TRUE), 4))
+    }, by = TF_ID]
+
+    sim[order(-similarity)]
+  })
+
   ## TF ID to TF name lookup from narpv
   tf_lookup <- reactive({
     unique(narpv[, .(TF_ID, TF)])
   })
 
-  ## Harmony table enriched with TF IDs and derived weight columns for module detection
+  ## Harmony table enriched with TF IDs and derived weight columns for module detection.
+  ## When input$harmony_source == "recalc" (default), harmony is recomputed on the fly
+  ## for just the TFs that regulate the currently selected targets, using subset-proportion NP
+  ## (Kirk's preferred behavior). Falls back to the precomputed global table if recalc returns
+  ## NULL (e.g. <2 TFs touch the targets) or if the user toggles to "global".
   target_harmony_dt <- reactive({
     lk <- tf_lookup()
-    h <- copy(dt)
 
+    use_recalc <- !is.null(input$harmony_source) && input$harmony_source == "recalc"
+
+    if (use_recalc) {
+      pcut <- suppressWarnings(as.numeric(input$regpcutoff))
+      if (is.na(pcut)) pcut <- 0.05
+      recalc <- recalculate_subset_harmony(
+        narpv = narpv,
+        target_genes = input$allgenes,
+        padj_cutoff = pcut,
+        fisher_universe = 32031
+      )
+      if (!is.null(recalc) && nrow(recalc) > 0) {
+        h <- copy(recalc)
+        ## Derived columns mirror the precomputed-path output
+        h[, Harmony := Concordant_Harmony - Discordant_Harmony]
+        h[, abs_harmony := abs(Harmony)]
+        h[, abs_harmony_sq := abs(Harmony)^2]
+        h[, concordant_weight := fifelse(is.na(Concordant_Harmony), 0, Concordant_Harmony)]
+        h[, discordant_weight := fifelse(is.na(Discordant_Harmony), 0, Discordant_Harmony)]
+        return(h[])
+      }
+      ## Fall through to precomputed path if recalc empty
+    }
+
+    h <- copy(dt)
     h <- merge(h, lk, by.x = "TF1", by.y = "TF", all.x = TRUE)
     setnames(h, "TF_ID", "TF1_ID")
     h <- merge(h, lk, by.x = "TF2", by.y = "TF", all.x = TRUE)
@@ -1045,7 +1100,7 @@ source("helpers.R", local = TRUE)
     out[]
   })
 
-  ## Louvain module detection on the hit TFs
+  ## Leiden module detection on the hit TFs
   tf_modules <- reactive({
     reg <- tf_reg_summary()
     hit <- unique(reg$TF_ID)
@@ -1053,7 +1108,7 @@ source("helpers.R", local = TRUE)
 
     hdt <- target_harmony_dt()
     weight_col <- switch(
-      input$louvain_weight_mode,
+      input$module_weight_mode,
       "abs_harmony" = "abs_harmony",
       "abs_harmony_sq" = "abs_harmony_sq",
       "concordant" = "concordant_weight",
@@ -1066,7 +1121,8 @@ source("helpers.R", local = TRUE)
       .(TF1_ID, TF2_ID, abs_harmony, abs_harmony_sq, concordant_weight, discordant_weight)
     ]
 
-    mods <- compute_louvain_modules(h, weight_col = weight_col, cutoff = 0.02)
+    mods <- compute_modules(h, weight_col = weight_col, cutoff = 0.02,
+                            method = "leiden")
 
     if (is.null(mods)) {
       return(data.table(TF_ID = hit, module = seq_along(hit)))
@@ -1109,6 +1165,15 @@ source("helpers.R", local = TRUE)
 
     mod_sizes <- out[, .(module_size = .N), by = module]
     out <- merge(out, mod_sizes, by = "module", all.x = TRUE)
+
+    ## Merge user similarity scores if a 2-column upload was provided
+    sim <- user_tf_similarity()
+    if (!is.null(sim) && nrow(sim) > 0) {
+      out <- merge(out, sim[, .(TF_ID, similarity, n_shared)], by = "TF_ID", all.x = TRUE)
+    } else {
+      out[, similarity := NA_real_]
+      out[, n_shared := NA_integer_]
+    }
     out[]
   })
 
@@ -1122,72 +1187,40 @@ source("helpers.R", local = TRUE)
   })
 
   ## Scatter plot: # targets vs outgoing Harmony balance, colored by module
+  ## When user uploads 2-column data, point outline indicates similarity (black = high, grey = low/NA)
   output$tfHarmonyScatter <- renderPlot({
     d <- tf_scatter_dt()
     req(nrow(d) > 0)
 
     d[, harmony_y := sum_concordant_harmony_out - sum_discordant_harmony_out]
 
-    ggplot(d, aes(x = n_targets, y = harmony_y, color = factor(module))) +
+    has_sim <- any(!is.na(d$similarity))
+
+    p <- ggplot(d, aes(x = n_targets, y = harmony_y, color = factor(module))) +
       geom_hline(yintercept = 0, linetype = "dashed") +
-      geom_point(aes(size = n_targets), alpha = 0.85) +
-      ggrepel::geom_text_repel(aes(label = label), size = 3, max.overlaps = 30) +
-      labs(x = "# regulated target genes", y = "Outgoing Harmony balance",
-           color = "Module", size = "# targets") +
       theme_bw()
-  })
 
-  ## Heatmap of TF x Target regulation direction, faceted by module
-  heatmap_dt <- reactive({
-    subnar <- targetsubnar()
-    reg    <- tf_scatter_dt()
-    d <- merge(subnar, reg[, .(TF_ID, label, module)], by = "TF_ID", all.x = TRUE)
-    d[]
-  })
-
-  output$targetRegHeatmap <- renderPlot({
-    d <- heatmap_dt()
-    req(nrow(d) > 0)
-
-    mat_dt <- d[, .(value = mean(log2FoldChange, na.rm = TRUE)), by = .(label, rn, module)]
-    mat_wide <- data.table::dcast(mat_dt, label + module ~ rn, value.var = "value", fill = NA)
-
-    row_meta <- mat_wide[, .(label, module)]
-    mat <- as.matrix(mat_wide[, !c("label", "module")])
-    rownames(mat) <- mat_wide$label
-
-    mat_clust <- mat
-    mat_clust[is.na(mat_clust)] <- 0
-
-    if (ncol(mat_clust) > 1) {
-      col_cor <- cor(mat_clust, use = "pairwise.complete.obs")
-      col_dist <- as.dist(1 - col_cor)
-      col_hc <- hclust(col_dist, method = "complete")
-      gene_order <- colnames(mat_clust)[col_hc$order]
+    if (has_sim) {
+      ## Label includes similarity score when available
+      d[, sim_label := fifelse(
+        is.na(similarity), label,
+        paste0(label, " (r=", round(similarity, 2), ")")
+      )]
+      p <- p +
+        geom_point(aes(size = n_targets, alpha = fifelse(is.na(similarity), 0.4, 0.85))) +
+        scale_alpha_identity() +
+        ggrepel::geom_text_repel(aes(label = sim_label), size = 3, max.overlaps = 30) +
+        labs(x = "# regulated target genes", y = "Outgoing Harmony balance",
+             color = "Module", size = "# targets",
+             subtitle = "Similarity (r) = Pearson correlation of user log2FC vs TARGET log2FC")
     } else {
-      gene_order <- colnames(mat_clust)
+      p <- p +
+        geom_point(aes(size = n_targets), alpha = 0.85) +
+        ggrepel::geom_text_repel(aes(label = label), size = 3, max.overlaps = 30) +
+        labs(x = "# regulated target genes", y = "Outgoing Harmony balance",
+             color = "Module", size = "# targets")
     }
-
-    plot_dt <- data.table::melt(
-      data.table(label = rownames(mat), mat, check.names = FALSE),
-      id.vars = "label", variable.name = "rn", value.name = "log2FoldChange"
-    )
-    plot_dt <- merge(plot_dt, row_meta, by = "label", all.x = TRUE)
-    plot_dt[, label := factor(label, levels = unique(plot_dt[order(module, label)]$label))]
-    plot_dt[, rn := factor(rn, levels = gene_order)]
-    plot_dt[, reg_dir := sign(log2FoldChange)]
-
-    ggplot(plot_dt, aes(x = rn, y = label, fill = factor(reg_dir))) +
-      geom_tile(color = NA) +
-      facet_grid(module ~ ., scales = "free_y", space = "free_y") +
-      scale_fill_manual(
-        values = c("-1" = "blue", "0" = "white", "1" = "red"),
-        name = "Regulation"
-      ) +
-      labs(x = "Target genes (clustered)", y = "TFs (grouped by module)", fill = "log2FC") +
-      theme_bw() +
-      theme(strip.text.y = element_text(angle = 0),
-            axis.text.x = element_text(angle = 45, hjust = 1))
+    p
   })
 
   ## Network graph for Target Regulation
@@ -1227,7 +1260,7 @@ source("helpers.R", local = TRUE)
         "Family: ", Family, "<br>",
         "Module: ", module, "<br>",
         "Module size: ", module_size, "<br>",
-        "Module definition: ", input$louvain_weight_mode, "<br><br>",
+        "Module definition: ", input$module_weight_mode, "<br><br>",
         "<b>Target regulation</b><br>",
         "Total targets: ", n_targets, "<br>",
         "Up targets: ", n_up_targets, "<br>",
@@ -1248,7 +1281,11 @@ source("helpers.R", local = TRUE)
         "Sum Discordant Harmony (in): ", round(sum_discordant_harmony_in, 3), "<br>",
         "Mean Concordant Harmony (in): ", round(mean_concordant_harmony_in, 3), "<br>",
         "Mean Discordant Harmony (in): ", round(mean_discordant_harmony_in, 3), "<br><br>",
-        "Best padj: ", signif(best_padj, 3)
+        "Best padj: ", signif(best_padj, 3),
+        fifelse(is.na(similarity), "",
+          paste0("<br><br><b>User similarity</b><br>",
+                 "Pearson r: ", round(similarity, 3), "<br>",
+                 "Shared genes: ", n_shared))
       )
     )]
 
@@ -1339,6 +1376,19 @@ source("helpers.R", local = TRUE)
         stabilization = list(enabled = TRUE, iterations = 800, fit = TRUE)
       ) %>%
       visEvents(stabilizationIterationsDone = "function () { this.setOptions({physics: false}); }")
+  })
+
+  ## TF similarity ranking table — only shown when 2-column upload is active
+  output$similarityTable <- DT::renderDT({
+    sim <- user_tf_similarity()
+    validate(need(!is.null(sim) && nrow(sim) > 0,
+      "Upload a 2-column file (GeneID, log2FC) to see TF similarity rankings."))
+    DT::datatable(
+      sim[, .(TF_ID, TF, Similarity = similarity, `Shared Genes` = n_shared,
+              `Mean TARGET log2FC` = mean_target_l2fc, `Mean User log2FC` = mean_user_l2fc)],
+      options = list(pageLength = 20, order = list(list(2, "desc"))),
+      rownames = FALSE
+    )
   })
 
 }
