@@ -2,11 +2,12 @@ CHANGES_2.txt - Session 2 (April 2026)
 
 OUTSTANDING ITEMS (from Kirk's email)
 - Tanglegram MSA: blocked on Kirk/Tim providing a better MSA file.
-- Cell Type Specificity column order: clustered for now, needs Kirk/Tim
-  input on a fixed biological tissue ordering.
+- Cell Type Specificity column order: back to default for now, needs
+  Kirk/Tim input on a fixed biological tissue ordering.
 - Tim's multiple motifs per TF: blocked on new motif data files.
-- Leiden modules: Louvain is in as prototype. Leiden needs leidenAlg
-  package (Python/reticulate dependency). One-line swap when ready.
+- Leiden modules: now the ONLY algorithm. Louvain removed entirely per Kirk.
+  Uses igraph::cluster_leiden with objective_function = "modularity".
+  Resolution parameter slider could be added later if needed.
 - Motif heatmap tick colors: working but imperfect (drift on zoom).
 - Motif dendrogram: colored labels but lost interactivity.
 - qs2 serialization: Kirk suggested replacing RDS with qs2 for faster
@@ -14,9 +15,21 @@ OUTSTANDING ITEMS (from Kirk's email)
 - Harmony table parquet: Kirk suggested parquet for partial loading.
   Low priority, loading is acceptable.
 - GO terms local computation: Kirk prefers GOST server results. Optional.
-- User data upload and harmony recalculation: conceptual, not yet scoped.
+- User data upload and harmony recalculation: BOTH IMPLEMENTED.
+  1-col + 2-col upload to Target Regulation; 2-col enables per-TF Pearson
+  similarity (scatter labels, tooltips, ranking table).
+  Recalculated harmony uses subset-proportion NP (Kirk's preference),
+  auto-switches on upload, manual toggle available.
+  Fisher background = genome size (32031) — open question, may revisit.
 
 ---
+
+Global - Family Harmony tab
+- Removed entirely. Kirk didn't find it useful.
+- Removed tabPanel from ui.R
+- Removed output$relationships (renderPlotly) and output$familyproportion
+  (renderVisNetwork) from server
+- subdt() reactive is still used by other tabs (heatmaps, tanglegram, clustering)
 
 Target Regulation
 - Integrated Kirk's March 24 rewrite: scatter plot, Louvain modules, heatmap, new network
@@ -25,6 +38,8 @@ Target Regulation
 - Added signed Harmony column to preprocess_data.R
 - Added library(ggrepel)
 - Fixed duplicate node IDs crash when a target is also a TF
+- Removed bottom heatmap (targetRegHeatmap output + heatmap_dt reactive).
+  Kirk didn't want it after seeing it in context.
 
 Pairwise - TF x TF
 - Table width 50% -> 30%
@@ -37,13 +52,14 @@ Pairwise - Motif Comparison
   Needs new motif data files to implement. Once added, can add a top-N dropdown.
 
 Pairwise - Cell Type Specificity
-- Added column (tissue) clustering in addition to existing row (gene) clustering.
-  Columns were previously alphabetical. Clustering groups similar cell types but
-  still not ideal — a fixed biological order (e.g. radial root layers) would
-  probably look better. Needs Kirk/Tim input on preferred tissue ordering.
+- Reverted: column (tissue) clustering removed. Columns are back to default order.
+  Tried clustering tissues by expression similarity, Kirk preferred the original
+  ordering. Fixed biological tissue order (e.g. radial root layers) still TBD —
+  needs Kirk/Tim input.
 
 Pairwise - NxTime Overlay
-- Rows now ordered by p-value instead of JIT bin (both root and shoot).
+- Reverted: rows are back to JIT bin ordering (both root and shoot).
+  Tried p-value ordering, Kirk preferred the original JIT ordering.
 
 Pairwise - GO Terms
 - Removed separate goplotheight slider from GO Terms subtab.
@@ -70,11 +86,17 @@ Dead code removed
 - network_layouts from ui.R
 - library(ggraph) and library(tidygraph) — no longer used anywhere.
 
-Louvain module detection
-- Now active in all three network tabs (Target Regulation, TF Regulation,
-  DEG Networks). All use compute_louvain_modules() from helpers.R.
-- Leiden is the end goal but requires leidenAlg/reticulate. Louvain is
-  the prototype. Swap is a one-line change when ready.
+Leiden module detection (Louvain removed)
+- Module detection active in all three network tabs (Target Regulation,
+  TF Regulation, DEG Networks). All use compute_modules() in helpers.R.
+- Switched from Louvain to Leiden via igraph::cluster_leiden (igraph 2.3.0+).
+  NO Python/leidenAlg dependency — that note in CHANGES was wrong.
+- objective_function = "modularity", n_iterations = 2.
+- Louvain removed entirely from the app per Kirk — no toggle, no fallback,
+  no backwards-compat wrapper. compute_louvain_modules() removed.
+- input$louvain_weight_mode renamed to input$module_weight_mode for clarity
+  (was always algorithm-agnostic, just badly named).
+- Resolution-parameter slider deferred for now.
 
 Global - Motif Heatmap
 - Axis labels colored red (up) / blue (down) via HTML spans in plotly ticktext.
