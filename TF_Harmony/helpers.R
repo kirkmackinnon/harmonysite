@@ -124,7 +124,9 @@ compute_modules <- function(h, weight_col = "weight", cutoff = 0.02,
 ## using only the genes in `target_genes` and only TFs that regulate >=1 such gene.
 ##
 ## Per Kirk's preference, NP uses the SUBSET proportion: NP(A) = N / |TF_A's DEGs INSIDE the upload|
-## (not the global TF_A DEG count). We symmetrize the asymmetric NP via geometric mean.
+## (not the global TF_A DEG count). Harmony is directional, as in the methods and the precomputed
+## dt: the TF1 -> TF2 row uses NP(TF1), the TF2 -> TF1 row uses NP(TF2). N, P and R are the same
+## in both directions.
 ##
 ## Concordant / Discordant variants split shared genes by whether log2FC signs agree.
 ##
@@ -189,10 +191,18 @@ recalculate_subset_harmony <- function(narpv, target_genes, padj_cutoff = 0.05,
   pair_stats[, Concordant_PValue := fisher_p(Concordant_Intersect, n_TF1, n_TF2, fisher_universe)]
   pair_stats[, Discordant_PValue := fisher_p(Discordant_Intersect, n_TF1, n_TF2, fisher_universe)]
 
+  ## Mirror each pair so both directions exist (TF1 -> TF2 and TF2 -> TF1), like the
+  ## precomputed dt. Downstream "outgoing" sums and top-k network edges read TF1.
+  mirrored <- copy(pair_stats)
+  setnames(mirrored,
+    c("TF1_ID", "TF2_ID", "TF1", "TF2", "TF1_Family", "TF2_Family", "n_TF1", "n_TF2"),
+    c("TF2_ID", "TF1_ID", "TF2", "TF1", "TF2_Family", "TF1_Family", "n_TF2", "n_TF1"))
+  pair_stats <- rbind(pair_stats, mirrored, use.names = TRUE)
+
   ## H = N x NP x P x R
-  ## NP symmetrized via geometric mean of NP(A) and NP(B). |R| because Harmony is positive.
-  pair_stats[, NP_con := sqrt((Concordant_Intersect / n_TF1) * (Concordant_Intersect / n_TF2))]
-  pair_stats[, NP_dis := sqrt((Discordant_Intersect / n_TF1) * (Discordant_Intersect / n_TF2))]
+  ## NP from TF1's perspective (directional). |R| because Harmony is positive.
+  pair_stats[, NP_con := Concordant_Intersect / n_TF1]
+  pair_stats[, NP_dis := Discordant_Intersect / n_TF1]
 
   ## Cap -log10(p) at a sane value to avoid Inf when p underflows
   pair_stats[, P_con := pmin(-log10(Concordant_PValue), 300)]

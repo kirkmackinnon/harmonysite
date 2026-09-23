@@ -20,6 +20,10 @@ OUTSTANDING ITEMS (from Kirk's email)
   similarity (scatter labels, tooltips, ranking table).
   Recalculated harmony uses subset-proportion NP (Kirk's preference),
   auto-switches on upload, manual toggle available.
+  Recalculated harmony is directional like the precomputed table:
+  TF1 -> TF2 uses NP(TF1), TF2 -> TF1 uses NP(TF2). (Was one symmetric
+  row per pair, which skewed the scatter y-axis and network edges toward
+  TFs with low AGI numbers.)
   Fisher background = genome size (32031) — open question, may revisit.
 
 ---
