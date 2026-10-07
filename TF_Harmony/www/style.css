@@ -1,0 +1,49 @@
+body {
+  background-color: white !important;
+  text-shadow: none !important;
+}
+.d3-tip th, tr, td, table {
+  background-color: white !important;
+}
+h1 {
+  color: black;
+  text-shadow: none;
+}
+p {
+  color: black;
+  text-shadow: none;
+}
+div {
+  text-shadow: none;
+}
+head {
+  text-shadow: none;
+}
+.shiny-input-container{
+  text-shadow: none;
+}
+h2 {
+  text-shadow: none;
+}
+a {
+  text-shadow: none;
+  text-decoration: none;
+}
+li {
+  text-shadow: none;
+}
+.active{
+  text-shadow: none !important;
+}
+li.active {
+  text-shadow: none;
+}
+.nav-tabs {
+  text-shadow: none;
+}
+h3 {
+  text-shadow: none;
+}
+h4 {
+  text-shadow: none;
+}
