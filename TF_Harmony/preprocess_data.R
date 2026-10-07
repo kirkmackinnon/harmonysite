@@ -112,7 +112,7 @@ htmsa <- Biostrings::readAAMultipleAlignment("Data/msa.fa")
 phylo_alignment <- msa::msaConvert(htmsa, type = "seqinr::alignment")
 phylo_distance <- seqinr::dist.alignment(phylo_alignment)
 phylo_tree <- ape::bionj(phylo_distance)
-phylo_dend <- as.dendrogram.phylo(phylo_tree)
+phylo_dend <- phylogram::as.dendrogram.phylo(phylo_tree)
 
 ## --- Save all preprocessed objects ---
 cat("  Saving RDS files to Data/...\n")
