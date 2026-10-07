@@ -86,6 +86,8 @@ source("helpers.R", local = TRUE)
       dev.off()
       TRUE
     }, error = function(e) {
+      ## Write the real cause to the Shiny log - the page only shows the generic message below
+      message("Motif plot failed: ", conditionMessage(e))
       try(dev.off(), silent = TRUE)
       FALSE
     })
