@@ -117,11 +117,11 @@ ui <- navbarPage("Landscape of TF Harmony",
         ## Main visual you see on load - concordant harmony heatmap, interactive plotly
         tabsetPanel(
           tabPanel("Concordant Harmony",
-            plotlyOutput(outputId = "conHarmonyHeatmap", height = 2000) %>% withSpinner()
+            plotlyOutput(outputId = "conHarmonyHeatmap", height = "auto") %>% withSpinner()
           ),
           ## Alternative to main heatmap - show discordant harmony instead, interactive plotly
           tabPanel("Discordant Harmony",
-            plotlyOutput(outputId = "disHarmonyHeatmap", height = 2000) %>% withSpinner()
+            plotlyOutput(outputId = "disHarmonyHeatmap", height = "auto") %>% withSpinner()
           )
         )
       ),

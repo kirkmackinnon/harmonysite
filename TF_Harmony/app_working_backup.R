@@ -730,6 +730,24 @@ source("helpers.R", local = TRUE)
       }
     }
     heatmap_log_note <- reactive(if (isTRUE(input$heatmaplog)) ", log color" else "")
+
+    ## Interactive version of a harmony heatmap. Height follows the number of TFs at the current
+    ## page width: cells are square when they can be at least 13px (capped at 40px so a single
+    ## family isn't drawn huge); with many TFs, rows stay 13px tall so the TF labels stay readable.
+    heatmap_plotly <- function(p, n_x, n_y, output_id) {
+      w <- session$clientData[[paste0("output_", output_id, "_width")]]
+      if (is.null(w) || w <= 0) w <- 1100
+      col_w <- (w - 250) / max(n_x, 1)
+      square <- col_w >= 13
+      row_h <- if (square) min(40, col_w) else 13
+      g <- ggplotly(p, tooltip = c("x", "y", "text"), height = round(n_y * row_h + 220))
+      if (square) {
+        g <- plotly::layout(g,
+          xaxis = list(constrain = "domain"),
+          yaxis = list(scaleanchor = "x", scaleratio = 1, constrain = "domain"))
+      }
+      g
+    }
     
     ## This is the harmony heatmap on the first tab of Global Analyses
     ## Clustering is done is separate reactive objects
@@ -783,15 +801,18 @@ source("helpers.R", local = TRUE)
 
           axis.title.x = element_blank(),
           axis.title.y = element_blank(),
-          legend.title = element_blank(), 
-          legend.position = "bottom"
-        ) + 
+          legend.title = element_blank(),
+          legend.position = "bottom",
+          ## Grid lines would run through the middle of each cell, so leave them off
+          panel.grid = element_blank(),
+          panel.border = element_blank()
+        ) +
 
         heatmap_fill("A") +
 
         ggtitle(paste0("Concordant Harmony, ordered by ", heatmap_order_label(), heatmap_log_note()))
-      
-      ggplotly(hm, tooltip = c("x", "y", "text"))
+
+      heatmap_plotly(hm, uniqueN(subdtcon$TF1), uniqueN(subdtcon$TF2), "conHarmonyHeatmap")
       
     })
      
@@ -847,16 +868,18 @@ source("helpers.R", local = TRUE)
           ),
           
           axis.title.x = element_blank(),
-          axis.title.y = element_blank(), 
-          legend.title = element_blank()
-        ) + 
+          axis.title.y = element_blank(),
+          legend.title = element_blank(),
+          panel.grid = element_blank(),
+          panel.border = element_blank()
+        ) +
 
         heatmap_fill("E", direction = if (isTRUE(input$heatmaplog)) -1 else 1) +
 
         labs(title = paste0("Discordant Harmony, ordered by ", heatmap_order_label(), heatmap_log_note()))
         
       
-     ggplotly(hm2, tooltip = c("x", "y", "text"))
+     heatmap_plotly(hm2, uniqueN(subdtdis$TF1), uniqueN(subdtdis$TF2), "disHarmonyHeatmap")
       })
     
     
