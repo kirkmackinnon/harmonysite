@@ -44,17 +44,25 @@ findfile <- function(pat, oldll = list()) {
 ## subdt: the pre-subsetted harmony datatable
 ## harmony_cutoff, intersect_cutoff, pv_cutoff: user-supplied filter values
 ## dist_method, clust_method: algorithm choices for dist() and hclust()
+## order_by: which term the clustering uses - "Harmony" (default) or one of its components:
+##   "Intersect", "Proportion", "PValue", "Correlation". The cutoffs above still filter on
+##   Harmony / Intersect / PValue whatever is chosen here.
+## same_order: if TRUE, returns one clustering for both axes (transpose is ignored), made from
+##   the square matrix averaged over both directions, so clusters line up along the diagonal.
 harmony_hclust <- function(subdt, harmony_type, transpose = FALSE,
                            harmony_cutoff, intersect_cutoff, pv_cutoff,
-                           dist_method, clust_method) {
+                           dist_method, clust_method, order_by = "Harmony",
+                           same_order = FALSE) {
   harmony_col <- paste0(harmony_type, "_Harmony")
   intersect_col <- paste0(harmony_type, "_Intersect")
   pvalue_col <- paste0(harmony_type, "_PValue")
+  order_col <- paste0(harmony_type, "_", order_by)
 
   sub <- subdt[, .(TF1, TF2,
     Harmony = get(harmony_col),
     Intersect = get(intersect_col),
-    PValue = get(pvalue_col)
+    PValue = get(pvalue_col),
+    Value = get(order_col)
   )]
 
   sub <- sub[!is.na(Harmony)][
@@ -63,10 +71,27 @@ harmony_hclust <- function(subdt, harmony_type, transpose = FALSE,
         PValue < as.numeric(pv_cutoff)][
           !is.infinite(Harmony)]
 
-  wdt <- dcast.data.table(sub[, .(TF1, TF2, Harmony)], TF1 ~ TF2, value.var = "Harmony", fill = 0)
+  ## P-values cluster on -log10(p) so bigger means more significant and missing pairs
+  ## (filled with 0 below) read as p = 1. Capped because some stored p-values are exactly 0.
+  if (order_by == "PValue") sub[, Value := pmin(-log10(Value), 300)]
+  ## Pairs without a value (e.g. too few shared genes for a correlation) count as no relationship
+  sub[is.na(Value), Value := 0]
+
+  wdt <- dcast.data.table(sub[, .(TF1, TF2, Value)], TF1 ~ TF2, value.var = "Value", fill = 0)
   mat <- as.matrix(wdt, rownames = "TF1")
 
-  if (transpose) mat <- t(mat)
+  ## A small family or strict cutoffs can leave fewer than two TFs, which can't be clustered
+  validate(need(nrow(mat) >= 2 && ncol(mat) >= 2,
+    "Fewer than two TFs have pairs passing the cutoffs for this selection, so there is nothing to cluster."))
+
+  if (same_order) {
+    tfs <- union(rownames(mat), colnames(mat))
+    sq <- matrix(0, length(tfs), length(tfs), dimnames = list(tfs, tfs))
+    sq[rownames(mat), colnames(mat)] <- mat
+    mat <- (sq + t(sq)) / 2
+  } else if (transpose) {
+    mat <- t(mat)
+  }
 
   d <- dist(mat, method = dist_method)
   hclust(d, method = clust_method)

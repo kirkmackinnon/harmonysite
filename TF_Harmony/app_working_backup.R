@@ -141,6 +141,21 @@ source("helpers.R", local = TRUE)
       )
     )  
     
+    ## "Show One Family" menu fills the TF/family box with that family ("All families" restores
+    ## the default). The menu then goes back to its blank prompt, so the same family can be
+    ## picked again after editing the box by hand.
+    observeEvent(input$familyquick, {
+      req(input$familyquick != "")
+      sel <- if (input$familyquick == "__all__") unique(tfswithfamilies$Family) else input$familyquick
+      updateSelectInput(session, "family1", selected = sel)
+      updateSelectInput(session, "familyquick", selected = "")
+    })
+
+    ## Clear All button empties the TF/family box so TFs or families can be picked by hand
+    observeEvent(input$familyclear, {
+      updateSelectInput(session, "family1", selected = character(0))
+    })
+
     ## Reactive function to subset harmony data on Global Analyses based on user input
     ## Most future Global Analysis harmony references use subdt**
     ## Subsetted in such a way that you can specify TF or TF Family
@@ -154,10 +169,14 @@ source("helpers.R", local = TRUE)
                TF1,
                TF2,
                Concordant_Intersect,
+               Concordant_Proportion,
                Concordant_PValue,
+               Concordant_Correlation,
                Concordant_Harmony,
                Discordant_Intersect,
+               Discordant_Proportion,
                Discordant_PValue,
+               Discordant_Correlation,
                Discordant_Harmony,
                TF1_Family,
                TF2_Family
@@ -664,29 +683,53 @@ source("helpers.R", local = TRUE)
     ## Reactive objects to calculate harmony clustering for heatmaps and tanglegrams.
     ## Done separately for both X and Y axes as harmony is directional.
     ## Uses harmony_hclust() from helpers.R (was previously ~120 lines of duplicated code).
+    ## input$heatmaporder picks which term of Harmony the clustering uses (Harmony by default).
     conhclustx <- reactive({
       harmony_hclust(subdt(), "Concordant", transpose = FALSE,
         input$familyharmonycutoff, input$familyintersectcutoff, input$familypvcutoff,
-        input$distmeth, input$clustmeth)
+        input$distmeth, input$clustmeth, input$heatmaporder,
+        same_order = isTRUE(input$heatmapsameorder))
     })
 
     conhclusty <- reactive({
       harmony_hclust(subdt(), "Concordant", transpose = TRUE,
         input$familyharmonycutoff, input$familyintersectcutoff, input$familypvcutoff,
-        input$distmeth, input$clustmeth)
+        input$distmeth, input$clustmeth, input$heatmaporder,
+        same_order = isTRUE(input$heatmapsameorder))
     })
 
     dishclustx <- reactive({
       harmony_hclust(subdt(), "Discordant", transpose = FALSE,
         input$familyharmonycutoff, input$familyintersectcutoff, input$familypvcutoff,
-        input$distmeth, input$clustmeth)
+        input$distmeth, input$clustmeth, input$heatmaporder,
+        same_order = isTRUE(input$heatmapsameorder))
     })
 
     dishclusty <- reactive({
       harmony_hclust(subdt(), "Discordant", transpose = TRUE,
         input$familyharmonycutoff, input$familyintersectcutoff, input$familypvcutoff,
-        input$distmeth, input$clustmeth)
+        input$distmeth, input$clustmeth, input$heatmaporder,
+        same_order = isTRUE(input$heatmapsameorder))
     })
+
+    ## Display name of the chosen ordering, shown in the heatmap titles and tanglegram subtitle
+    heatmap_order_label <- reactive({
+      lab <- names(heatmap_order_choices)[heatmap_order_choices == input$heatmaporder]
+      if (isTRUE(input$heatmapsameorder)) lab <- paste0(lab, ", same order on both axes")
+      lab
+    })
+
+    ## Log color scale for the heatmaps. Starts at 0.01 so a few tiny values don't stretch the
+    ## colors; anything smaller shows as the darkest color.
+    heatmap_fill <- function(option, direction = 1) {
+      if (isTRUE(input$heatmaplog)) {
+        scale_fill_viridis_c(option = option, direction = direction, trans = "log10",
+                             limits = c(0.01, NA), oob = scales::squish)
+      } else {
+        scale_fill_viridis_c(option = option, direction = direction)
+      }
+    }
+    heatmap_log_note <- reactive(if (isTRUE(input$heatmaplog)) ", log color" else "")
     
     ## This is the harmony heatmap on the first tab of Global Analyses
     ## Clustering is done is separate reactive objects
@@ -722,6 +765,8 @@ source("helpers.R", local = TRUE)
             x = TF1,
             y = TF2,
             fill = Concordant_Harmony,
+            ## Hover shows the raw value even when the color scale is log
+            text = paste0("Concordant_Harmony: ", signif(Concordant_Harmony, 4))
 
           ),
 
@@ -742,11 +787,11 @@ source("helpers.R", local = TRUE)
           legend.position = "bottom"
         ) + 
 
-        scale_fill_viridis_c(option = "A") +
+        heatmap_fill("A") +
 
-        ggtitle("Concordant Harmony")
+        ggtitle(paste0("Concordant Harmony, ordered by ", heatmap_order_label(), heatmap_log_note()))
       
-      ggplotly(hm) 
+      ggplotly(hm, tooltip = c("x", "y", "text"))
       
     })
      
@@ -771,16 +816,21 @@ source("helpers.R", local = TRUE)
       subdtdis$TF1 <- factor(subdtdis$TF1, levels = disorderx)
       subdtdis$TF2 <- factor(subdtdis$TF2, levels = disordery)
       setkey(subdtdis, TF1)
-      
-      hm2 <- ggplot() + 
-        
+
+      ## A log scale needs positive values, so log color plots the magnitude with the palette
+      ## reversed - the strongest discordance stays darkest, as on the default negated scale.
+      dis_fill <- if (isTRUE(input$heatmaplog)) quote(Discordant_Harmony) else quote(Discordant_Harmony * -1)
+
+      hm2 <- ggplot() +
+
         geom_raster(
           data = subdtdis,
           aes(
 
-            x = TF1, 
+            x = TF1,
             y = TF2,
-            fill = Discordant_Harmony * -1,
+            fill = !!dis_fill,
+            text = paste0("Discordant_Harmony: ", signif(Discordant_Harmony, 4)),
 
           ),
 
@@ -801,12 +851,12 @@ source("helpers.R", local = TRUE)
           legend.title = element_blank()
         ) + 
 
-        scale_fill_viridis_c(option = "E") +
+        heatmap_fill("E", direction = if (isTRUE(input$heatmaplog)) -1 else 1) +
 
-        labs(title = "Discordant Harmony")
+        labs(title = paste0("Discordant Harmony, ordered by ", heatmap_order_label(), heatmap_log_note()))
         
       
-     ggplotly(hm2)
+     ggplotly(hm2, tooltip = c("x", "y", "text"))
       })
     
     
@@ -837,7 +887,12 @@ source("helpers.R", local = TRUE)
     dd <- dendlist(as.dendrogram(conhclustx()), as.dendrogram(dishclustx()), ph, as.dendrogram(muc), as.dendrogram(mdc))
     
     kb <- as.integer(input$kbreaks)
-    tanglegram(dd, sub = paste(input$tanglechoice1, "x", input$tanglechoice2), k_branches = kb, k_labels = kb, sort = T, which = c(which(choices == input$tanglechoice1), which(choices == input$tanglechoice2)))
+    ## The harmony dendrograms follow the heatmap ordering dropdown, so say which one is in use
+    tsub <- paste(input$tanglechoice1, "x", input$tanglechoice2)
+    if (any(c(input$tanglechoice1, input$tanglechoice2) %in% c("Concordant", "Discordant"))) {
+      tsub <- paste0(tsub, " (harmony ordered by ", heatmap_order_label(), ")")
+    }
+    tanglegram(dd, sub = tsub, k_branches = kb, k_labels = kb, sort = T, which = c(which(choices == input$tanglechoice1), which(choices == input$tanglechoice2)))
   })
   
   ## This creates the matrix of motif similarity 

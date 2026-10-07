@@ -12,6 +12,15 @@ newdt <- readRDS("Data/newdt.rds")
 
 ## DEGs in narrow format, with color column, HSF.A4A fix, and exp17 removed
 narpv <- readRDS("Data/narpv.rds")
+
+## Proportion term of Harmony (NP in the methods) isn't stored in dt, so derive it here:
+## shared DEGs / TF1's total DEG count (padj < 0.05). Directional like Harmony itself -
+## the TF1 -> TF2 row uses TF1's count. Used to order the Global Analyses heatmaps.
+tf_deg_counts <- narpv[padj < 0.05, .(n_degs = uniqueN(rn)), by = TF]
+dt[tf_deg_counts, on = .(TF1 = TF), TF1_DEGs := i.n_degs]
+dt[, Concordant_Proportion := Concordant_Intersect / TF1_DEGs]
+dt[, Discordant_Proportion := Discordant_Intersect / TF1_DEGs]
+dt[, TF1_DEGs := NULL]
 ## Unique gene IDs from DEGs, used for Target Regulation selectize
 allgeneids <- readRDS("Data/allgeneids.rds")
 ## Ordered unique TF names from DEGs

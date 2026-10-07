@@ -6,6 +6,27 @@
 ## Global Analyses, Pairwise Analyses, and Target Regulation
 ## Then each of those panels has sub panels and figures.
 
+## Options for ordering the Global Analyses heatmaps: Harmony itself or one of its terms
+## (H = N x NP x P x R). Values are the column suffixes in dt, e.g. Concordant_PValue.
+heatmap_order_choices <- c(
+  "Harmony" = "Harmony",
+  "Shared DEGs (N)" = "Intersect",
+  "Proportion of shared DEGs (NP)" = "Proportion",
+  "Fisher p-value (P)" = "PValue",
+  "Correlation of log2FC (R)" = "Correlation"
+)
+
+## Families for the "Show One Family" menu: only those that can fill both Global Analyses heatmaps
+## on their own (at least two TFs with pairs passing the default cutoffs), largest first.
+single_family_sizes <- rbindlist(lapply(unique(tfswithfamilies$Family), function(fam) {
+  s <- dt[TF1_Family == fam & TF2_Family == fam]
+  con <- s[Concordant_Harmony > 0 & Concordant_Intersect > 0 & Concordant_PValue < 0.05, uniqueN(TF1)]
+  dis <- s[Discordant_Harmony > 0 & Discordant_Intersect > 0 & Discordant_PValue < 0.05, uniqueN(TF1)]
+  data.table(Family = fam, n_tfs = uniqueN(c(s$TF1, s$TF2)), fills_both = con >= 2 & dis >= 2)
+}))[fills_both == TRUE][order(-n_tfs, Family)]
+single_family_choices <- setNames(single_family_sizes$Family,
+                                  paste0(single_family_sizes$Family, " (", single_family_sizes$n_tfs, " TFs)"))
+
 ui <- navbarPage("Landscape of TF Harmony",
 
   tabPanel("Global Analyses",
@@ -33,6 +54,20 @@ ui <- navbarPage("Landscape of TF Harmony",
         selected = "ward.D2",
         multiple = F
       ),
+      ## User can choose which term of Harmony orders the heatmap axes (Harmony itself by default).
+      ## The heatmaps still display Harmony values - only the row/column order changes.
+      selectInput(
+        inputId = "heatmaporder",
+        label = "Order Heatmaps By",
+        choices = heatmap_order_choices,
+        selected = "Harmony",
+        multiple = F
+      ),
+      ## Display toggles for the heatmaps. Log color: Harmony is heavily skewed, so most cells
+      ## look dark on a linear scale. Same order: one TF order for both axes (clustered on
+      ## A -> B and B -> A together), so clusters line up along the diagonal.
+      checkboxInput(inputId = "heatmaplog", label = "Log Color Scale", value = FALSE),
+      checkboxInput(inputId = "heatmapsameorder", label = "Same Order on Both Axes", value = FALSE),
       ## Similarly user can define what type of algorithm is used for motif comparison
       ## These are just options from the motif package
       ## again this may be removed at a later point, I'm not sure how many people have strong opinions on
@@ -44,6 +79,23 @@ ui <- navbarPage("Landscape of TF Harmony",
         selected = "ALLR_LL",
         multiple = F,
         selectize = F
+      )
+    ),
+
+    ## Shortcuts for the TF/family box below: show a single family in one click, or clear the
+    ## box to pick TFs/families by hand (it starts with every family selected)
+    fluidRow(
+      column(4,
+        selectInput(
+          inputId = "familyquick",
+          label = "Show One Family:",
+          choices = c("Pick a family..." = "", "All families" = "__all__", single_family_choices),
+          selected = "",
+          selectize = F
+        )
+      ),
+      column(2,
+        actionButton(inputId = "familyclear", label = "Clear All", style = "margin-top: 25px;")
       )
     ),
 
