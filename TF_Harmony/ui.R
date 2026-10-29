@@ -186,21 +186,29 @@ ui <- navbarPage("Landscape of TF Harmony",
   tabPanel("Pairwise Analyses",
     inputPanel(
       ## User input for selecting which tfs they want to compare
-      ## Based on which DEG files are available to read in individually
+      ## Starts with one TF; the pair table below lists its partners. Add more TFs (or upload a
+      ## list) to widen the table.
       selectizeInput(
         inputId = "TFs",
         label = "TFs",
         choices = idoptions,
         multiple = T,
-        selected = idoptions[1:2],
-        options = list(maxItems = 10)
+        selected = idoptions[1]
       ),
-      ## Upload restricts the dropdown to just the uploaded TFs (first 2 pre-selected)
-      ## Clear button restores the full TF list and resets the file input display
+      ## Upload puts every uploaded TF in the box above
+      ## Clear button resets the box to one TF and resets the file input display
       div(
         uiOutput("tfupload_ui"),
         actionButton(inputId = "tfupload_clear", label = "Clear upload",
                      style = "margin-top: -10px;")
+      ),
+      ## OR: pairs between any TF in the box and every other TF in the database
+      ## AND: only pairs where both TFs are in the box (e.g. comparing an uploaded list)
+      radioButtons(
+        inputId = "pairmode",
+        label = "Show pairs:",
+        choices = c("With any TF in the box (OR)" = "or", "Only between TFs in the box (AND)" = "and"),
+        selected = "or"
       ),
       ## Users can adjust size of pairwise harmony plot
       sliderInput(
@@ -212,6 +220,11 @@ ui <- navbarPage("Landscape of TF Harmony",
       ## one plot with all the pairwise combinations shown in different colors
       checkboxInput(inputId = "harmonyinterfacet", label = "Facet by interaction:", value = T)
     ),
+
+    ## Pair table: harmony from each TF in the box to its partners (directional, TF -> partner).
+    ## Clicking a row picks the pair that the plots below show.
+    DT::DTOutput("pairTable") %>% withSpinner(),
+    h4(textOutput("pairSelected")),
 
     tabsetPanel(id = "pairwise",
       ## First pairwise plot
@@ -263,6 +276,7 @@ ui <- navbarPage("Landscape of TF Harmony",
       ## TF Regulation - shows harmony edges between selected TFs
       ## Module detection via Leiden, TFs as triangles with synonyms
       tabPanel("TF Regulation",
+        helpText("Network of every TF in the box above, not just the selected pair."),
         inputPanel(
           sliderInput(
             inputId = "HarmonyRange",
@@ -277,6 +291,7 @@ ui <- navbarPage("Landscape of TF Harmony",
       ## DEG Networks - shows TF->target DEG edges with harmony overlay
       ## Module detection via Leiden, TFs as triangles, targets as boxes
       tabPanel("DEG Networks",
+        helpText("Network of every TF in the box above, not just the selected pair."),
         inputPanel(
           numericInput(inputId = "tfregpcutoff", label = "Adjusted P-value Cutoff:", value = 0.05, min = 0, max = 1, step = 0.01),
           numericInput(inputId = "tfreglfccutoff", label = "Log2FoldChange Cutoff:", value = 2, min = 0, step = 0.1),

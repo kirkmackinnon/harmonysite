@@ -37,29 +37,81 @@ source("helpers.R", local = TRUE)
   ## a safe default when an input might be NULL before its UI element mounts.
   `%||%` <- function(a, b) if (is.null(a)) b else a
 
-  ## Multi-TF DEG lookup. selectize input limited to TF ids
-  ## findfile was refactored to use the for loop and cycle through for as many tfs as needed. 
+  ## Pair table for Pairwise Analyses. OR: every pair from a TF in the box to any other TF in the
+  ## database. AND: only pairs where both TFs are in the box. Rows are directional
+  ## (TF -> partner), like the harmony table on Global Analyses.
+  pair_table <- reactive({
+    validate(need(length(input$TFs) >= 1, "Enter at least one TF."))
+    if (identical(input$pairmode, "and")) {
+      validate(need(length(input$TFs) >= 2, "Add at least two TFs to show pairs between them (AND)."))
+      pt <- dt[TF1 %in% input$TFs & TF2 %in% input$TFs]
+    } else {
+      pt <- dt[TF1 %in% input$TFs]
+    }
+    pt[order(-Concordant_Harmony), .(
+      TF = TF1, Partner = TF2, `Partner Family` = TF2_Family,
+      `Concordant Harmony` = Concordant_Harmony, `Discordant Harmony` = Discordant_Harmony,
+      Harmony = Concordant_Harmony - Discordant_Harmony,
+      `Concordant DEGs` = Concordant_Intersect, `Discordant DEGs` = Discordant_Intersect
+    )]
+  })
+
+  output$pairTable <- DT::renderDT({
+    DT::datatable(pair_table(),
+      selection = "single", rownames = FALSE, extensions = "Buttons",
+      options = list(
+        pageLength = 10, lengthMenu = c(10, 25, 50, 100),
+        dom = "Blfrtip", order = list(),
+        buttons = list(list(extend = "csv", filename = "pair_harmony"))
+      )
+    ) %>% DT::formatRound(c("Concordant Harmony", "Discordant Harmony", "Harmony"), 3)
+  }, server = FALSE)
+
+  ## The pair clicked in the pair table. Kept by name (not row number) and cleared whenever the
+  ## TFs or AND/OR change, so a new table never shows plots for a pair nobody picked.
+  selected_pair <- reactiveVal(NULL)
+  observeEvent(input$pairTable_rows_selected, {
+    sel <- input$pairTable_rows_selected
+    pt <- isolate(pair_table())
+    selected_pair(if (length(sel) == 1) c(pt$TF[sel], pt$Partner[sel]) else NULL)
+  }, ignoreNULL = FALSE)
+  observeEvent(list(input$TFs, input$pairmode), selected_pair(NULL), ignoreNULL = FALSE)
+
+  ## The selected pair drives TF x TF, Motif Comparison, Cell Type Specificity, NxTime Overlay
+  ## and GO Terms. TF Regulation and DEG Networks use every TF in the box instead.
+  pair_tfs <- reactive({
+    validate(need(!is.null(selected_pair()), "Click a pair in the table above to see its plots."))
+    selected_pair()
+  })
+
+  output$pairSelected <- renderText({
+    p <- selected_pair()
+    if (is.null(p)) "Click a pair in the table above to see its plots."
+    else paste0("Showing plots for ", p[1], " and ", p[2])
+  })
+
+  ## DEG lookup for the selected pair
+  ## findfile was refactored to use the for loop and cycle through for as many tfs as needed.
   ## Uses NarPV to calculate overlapping DEGs on the fly.
   ## Previous results are cached so only new TF selections trigger recalculation.
   prev_tarfs <- reactiveVal(list())
   tarfs <- reactive({
-    result <- findfile(input$TFs, prev_tarfs())
+    result <- findfile(pair_tfs(), prev_tarfs())
     prev_tarfs(result)
     result
   })
 
   prev_matched <- reactiveVal(data.table())
   matched <- reactive({
-    validate(need(length(input$TFs) >= 2, "Select at least two TFs for pairwise analysis."))
     result <- matchtidy(tarfs(), prev_matched())
     prev_matched(result)
     result
   })
-  
-  ## Restricts Harmony to only use the input TFs
-  ## Uses newdt - the harmony data with fewer columns 
+
+  ## Restricts Harmony to the TFs in the box (TF Regulation network)
+  ## Uses newdt - the harmony data with fewer columns
   subgraph <- reactive({
-    validate(need(length(input$TFs) >= 2, "Select at least two TFs for pairwise analysis."))
+    validate(need(length(input$TFs) >= 2, "Add at least two TFs to the box to see their network."))
     newdt[(TF1 %in% input$TFs)][TF2 %in% input$TFs]
     })
 
@@ -71,9 +123,8 @@ source("helpers.R", local = TRUE)
   
   output$motifplot <- renderImage({
     req(input$pairwise == "pairwisemotifs")
-    req(length(input$TFs) >= 1)
 
-    pattern <- paste0("^(", paste0(input$TFs, collapse = "|"), ")_")
+    pattern <- paste0("^(", paste0(pair_tfs(), collapse = "|"), ")_")
 
     subpfms <- pfms[grepl(pattern, names(pfms))]
     validate(need(length(subpfms) >= 1, "No motifs found for the selected TFs."))
@@ -107,9 +158,8 @@ source("helpers.R", local = TRUE)
   ## Displays as a long-format table of TF1 vs TF2 similarity scores
   output$motifSimTable <- DT::renderDT({
     req(input$pairwise == "pairwisemotifs")
-    req(length(input$TFs) >= 2)
 
-    pattern <- paste0("^(", paste0(input$TFs, collapse = "|"), ")_")
+    pattern <- paste0("^(", paste0(pair_tfs(), collapse = "|"), ")_")
     matches <- which(grepl(pattern, names(pwms)))
     req(length(matches) >= 2)
 
@@ -128,10 +178,10 @@ source("helpers.R", local = TRUE)
 
   ## Showing subset harmony table in an interactive DataTable with scroll bars
   ## This is under *pairwise harmony*
-  ## Only shows harmony for subsetted TF list based on user input
+  ## Shows both directions of the selected pair
     output$harmonyTable <- DT::renderDataTable(
       {
-        setDT(subgraph())
+        newdt[TF1 %in% pair_tfs() & TF2 %in% pair_tfs()]
       },
       selection = 'single',
       extensions = 'Buttons',
@@ -285,7 +335,7 @@ source("helpers.R", local = TRUE)
     goout <- reactive({
       targs <- split(matched()$rn, f = matched()$Inter)
       gost(targs, organism = "athaliana", multi_query = T)
-    }) %>% bindCache(sort(input$TFs))
+    }) %>% bindCache(sort(pair_tfs()))
     
     
     ## Rendering plot output of GO terms
@@ -346,8 +396,9 @@ source("helpers.R", local = TRUE)
     ## Pairwise Analyses
     ## Accepts either TF synonyms (e.g. "ABF3") or AT IDs (e.g. "AT4G34000").
     ## AT IDs are translated to synonyms via the narpv TF_ID -> TF lookup.
-    ## Upload restricts the dropdown to just the uploaded TFs and pre-selects the first 2.
-    ## "Clear upload" button restores the full TF list.
+    ## Upload puts every uploaded TF in the box (the full TF list stays available to add more);
+    ## the AND/OR toggle then decides which pairs the pair table shows.
+    ## "Clear upload" button resets the box to one TF.
     observeEvent(input$tfupload, {
       file <- input$tfupload
       fdt <- fread(file$datapath, header = TRUE)
@@ -376,26 +427,22 @@ source("helpers.R", local = TRUE)
         return()
       }
 
-      selected_tfs <- head(ordered_tfs, 2)
-
-      updateSelectizeInput(
-        session = session,
-        inputId = "TFs",
-        choices = ordered_tfs,
-        selected = selected_tfs
-      )
-    })
-
-    ## Clear upload restriction: restore full TF list, keep current selection where valid,
-    ## and re-render the file input so the file name / "Upload complete" status disappears.
-    observeEvent(input$tfupload_clear, {
-      keep <- intersect(input$TFs, idoptions)
-      if (length(keep) == 0) keep <- idoptions[1:2]
       updateSelectizeInput(
         session = session,
         inputId = "TFs",
         choices = idoptions,
-        selected = keep
+        selected = ordered_tfs
+      )
+    })
+
+    ## Clear upload: reset the box to one TF and re-render the file input so the
+    ## file name / "Upload complete" status disappears.
+    observeEvent(input$tfupload_clear, {
+      updateSelectizeInput(
+        session = session,
+        inputId = "TFs",
+        choices = idoptions,
+        selected = idoptions[1]
       )
       tfupload_reset(tfupload_reset() + 1)
     })
