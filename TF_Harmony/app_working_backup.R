@@ -1518,6 +1518,80 @@ source("helpers.R", local = TRUE)
     )
   })
 
+  ## ---- Single TF tab ----
+
+  ## Rank of every partner within each TF's harmony list (1 = highest concordant harmony),
+  ## for the Rank / Partner's Rank columns
+  concordant_ranks <- dt[, .(TF2, Rank = frank(-Concordant_Harmony, ties.method = "min", na.last = "keep")), by = TF1]
+
+  ## TF-level facts from the DEG table: AGI ID, family, activity, overexpression of its own
+  ## gene, and DEG counts (padj < 0.05 - the same DEGs harmony is built from)
+  output$singletfSummary <- renderTable({
+    tf <- req(input$singletf)
+    rows <- narpv[TF == tf]
+    validate(need(nrow(rows) > 0, "No data for this TF."))
+    tf_id <- rows$TF_ID[1]
+    family <- dt[TF1 == tf, TF1_Family][1]
+    if (is.na(family)) family <- rows$Family[1]
+    activity <- rows$Activity[1]
+    own <- rows[rn == tf_id]
+    degs <- unique(rows[!is.na(padj) & padj < 0.05, .(rn, log2FoldChange)], by = "rn")
+    data.frame(
+      c("TF", "AGI ID", "Family", "Activity",
+        "Overexpression (log2FC of its own gene)", "DEGs (padj < 0.05)", "Up-regulated", "Down-regulated"),
+      c(tf, tf_id, family,
+        if (is.na(activity) || activity == "") "-" else activity,
+        if (nrow(own) == 0) "-" else format(round(own$log2FoldChange[1], 2)),
+        nrow(degs), sum(degs$log2FoldChange > 0), sum(degs$log2FoldChange < 0))
+    )
+  }, colnames = FALSE, striped = TRUE)
+
+  ## De novo motif logos: the TF's up and down motifs, stacked (the stack draws the first motif
+  ## at the bottom, so down goes first to put up on top)
+  output$singletfMotifs <- renderImage({
+    tf <- req(input$singletf)
+    sub <- pfms[intersect(paste0(tf, c("_down", "_up")), names(pfms))]
+    validate(need(length(sub) >= 1, "No de novo motifs for this TF."))
+    outfile <- tempfile(fileext = ".svg")
+    ok <- tryCatch({
+      svg(outfile, width = 8, height = 2 * length(sub) + 0.1)
+      grid::grid.newpage()
+      motifStack(sub, layout = "stack")
+      dev.off()
+      TRUE
+    }, error = function(e) {
+      message("Single TF motif logos failed: ", conditionMessage(e))
+      try(dev.off(), silent = TRUE)
+      FALSE
+    })
+    validate(need(ok && file.exists(outfile) && file.info(outfile)$size > 500, "Motif logos failed to render."))
+    list(src = outfile, contentType = "image/svg+xml", width = "100%", height = "auto",
+         alt = paste(tf, "de novo motifs"))
+  }, deleteFile = TRUE)
+
+  ## Every TF this one shares harmony with, from this TF's side (TF -> partner)
+  output$singletfPartners <- DT::renderDT({
+    tf <- req(input$singletf)
+    p <- dt[TF1 == tf]
+    validate(need(nrow(p) > 0, "No harmony partners for this TF."))
+    p <- merge(p, concordant_ranks[TF1 == tf, .(TF2, Rank)], by = "TF2", all.x = TRUE)
+    p <- merge(p, concordant_ranks[TF2 == tf, .(TF2 = TF1, `Partner's Rank` = Rank)], by = "TF2", all.x = TRUE)
+    p <- p[order(-Concordant_Harmony), .(
+      Partner = TF2, `Partner Family` = TF2_Family,
+      `Concordant Harmony` = Concordant_Harmony, `Discordant Harmony` = Discordant_Harmony,
+      Harmony = Concordant_Harmony - Discordant_Harmony,
+      `Concordant DEGs` = Concordant_Intersect, `Discordant DEGs` = Discordant_Intersect,
+      Rank, `Partner's Rank`
+    )]
+    DT::datatable(p, rownames = FALSE, selection = "none", extensions = "Buttons",
+      options = list(
+        pageLength = 10, lengthMenu = c(10, 25, 50, 100),
+        dom = "Blfrtip", order = list(),
+        buttons = list(list(extend = "csv", filename = paste0(tf, "_harmony_partners")))
+      )
+    ) %>% DT::formatRound(c("Concordant Harmony", "Discordant Harmony", "Harmony"), 3)
+  }, server = FALSE)
+
 }
 
 # Run the application 

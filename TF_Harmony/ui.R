@@ -389,5 +389,26 @@ ui <- navbarPage("Landscape of TF Harmony",
     ),
 
     includeCSS("www/style.css")
+  ),
+
+  ## Fourth panel - Single TF
+  ## Overview of one TF: family, activity, overexpression level, DEG counts, de novo motifs,
+  ## and every TF it shares harmony with
+  tabPanel("Single TF",
+    inputPanel(
+      selectizeInput(inputId = "singletf", label = "TF", choices = idoptions, selected = idoptions[1])
+    ),
+    fluidRow(
+      column(4,
+        h4("Overview"),
+        tableOutput("singletfSummary")
+      ),
+      column(8,
+        h4("De novo motifs"),
+        imageOutput("singletfMotifs", height = "auto") %>% withSpinner()
+      )
+    ),
+    h4("Harmony partners"),
+    DT::DTOutput("singletfPartners") %>% withSpinner()
   )
 )
