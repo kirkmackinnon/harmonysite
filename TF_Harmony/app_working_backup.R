@@ -768,14 +768,26 @@ source("helpers.R", local = TRUE)
       lab
     })
 
-    ## Log color scale for the heatmaps. Starts at 0.01 so a few tiny values don't stretch the
-    ## colors; anything smaller shows as the darkest color.
-    heatmap_fill <- function(option, direction = 1) {
+    ## Color scale for the heatmaps: log or linear, with optional Color Min / Color Max caps in
+    ## harmony units (values past a cap get the end color). The log scale starts at 0.01 unless a
+    ## min is set, so a few tiny values don't stretch the colors. negate = TRUE for the discordant
+    ## heatmap's linear scale, which plots -harmony.
+    heatmap_fill <- function(option, direction = 1, negate = FALSE) {
+      cap <- function(v) {
+        v <- suppressWarnings(as.numeric(v))
+        if (length(v) == 1 && !is.na(v)) v else NA_real_
+      }
+      lo <- cap(input$heatmapcolormin)
+      hi <- cap(input$heatmapcolormax)
+      validate(need(is.na(lo) || is.na(hi) || lo < hi, "Color Min must be below Color Max."))
       if (isTRUE(input$heatmaplog)) {
+        if (is.na(lo) || lo <= 0) lo <- 0.01
+        validate(need(is.na(hi) || hi > lo, "With log color, Color Max must be above Color Min (0.01 if blank)."))
         scale_fill_viridis_c(option = option, direction = direction, trans = "log10",
-                             limits = c(0.01, NA), oob = scales::squish)
+                             limits = c(lo, hi), oob = scales::squish)
       } else {
-        scale_fill_viridis_c(option = option, direction = direction)
+        scale_fill_viridis_c(option = option, direction = direction,
+                             limits = if (negate) -c(hi, lo) else c(lo, hi), oob = scales::squish)
       }
     }
     heatmap_log_note <- reactive(if (isTRUE(input$heatmaplog)) ", log color" else "")
@@ -795,7 +807,8 @@ source("helpers.R", local = TRUE)
           xaxis = list(constrain = "domain"),
           yaxis = list(scaleanchor = "x", scaleratio = 1, constrain = "domain"))
       }
-      g
+      ## Empty cells (pairs that don't pass the filters) show the plot background
+      plotly::layout(g, plot_bgcolor = if (isTRUE(input$heatmapgreyempty)) "#d9d9d9" else "white")
     }
     
     ## This is the harmony heatmap on the first tab of Global Analyses
@@ -923,7 +936,8 @@ source("helpers.R", local = TRUE)
           panel.border = element_blank()
         ) +
 
-        heatmap_fill("E", direction = if (isTRUE(input$heatmaplog)) -1 else 1) +
+        heatmap_fill("E", direction = if (isTRUE(input$heatmaplog)) -1 else 1,
+                     negate = !isTRUE(input$heatmaplog)) +
 
         labs(title = paste0("Discordant Harmony, ordered by ", heatmap_order_label(), heatmap_log_note()))
         

@@ -68,6 +68,12 @@ ui <- navbarPage("Landscape of TF Harmony",
       ## A -> B and B -> A together), so clusters line up along the diagonal.
       checkboxInput(inputId = "heatmaplog", label = "Log Color Scale", value = FALSE),
       checkboxInput(inputId = "heatmapsameorder", label = "Same Order on Both Axes", value = FALSE),
+      ## Empty cells (pairs that don't pass the filters) in grey instead of white
+      checkboxInput(inputId = "heatmapgreyempty", label = "Grey Empty Cells", value = FALSE),
+      ## Optional color caps in harmony units: values above the max / below the min get the end
+      ## color. Blank = full range.
+      numericInput(inputId = "heatmapcolormin", label = "Color Min:", value = NA, min = 0, step = 0.05),
+      numericInput(inputId = "heatmapcolormax", label = "Color Max:", value = NA, min = 0, step = 0.05),
       ## Similarly user can define what type of algorithm is used for motif comparison
       ## These are just options from the motif package
       ## again this may be removed at a later point, I'm not sure how many people have strong opinions on
