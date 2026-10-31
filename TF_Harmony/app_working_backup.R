@@ -1538,8 +1538,8 @@ source("helpers.R", local = TRUE)
   ## for the Rank / Partner's Rank columns
   concordant_ranks <- dt[, .(TF2, Rank = frank(-Concordant_Harmony, ties.method = "min", na.last = "keep")), by = TF1]
 
-  ## TF-level facts from the DEG table: AGI ID, family, activity, overexpression of its own
-  ## gene, and DEG counts (padj < 0.05 - the same DEGs harmony is built from)
+  ## TF-level facts from the DEG table: AGI ID, family, overexpression of its own gene, and
+  ## DEG counts (padj < 0.05 - the same DEGs harmony is built from)
   output$singletfSummary <- renderTable({
     tf <- req(input$singletf)
     rows <- narpv[TF == tf]
@@ -1547,14 +1547,12 @@ source("helpers.R", local = TRUE)
     tf_id <- rows$TF_ID[1]
     family <- dt[TF1 == tf, TF1_Family][1]
     if (is.na(family)) family <- rows$Family[1]
-    activity <- rows$Activity[1]
     own <- rows[rn == tf_id]
     degs <- unique(rows[!is.na(padj) & padj < 0.05, .(rn, log2FoldChange)], by = "rn")
     data.frame(
-      c("TF", "AGI ID", "Family", "Activity",
+      c("TF", "AGI ID", "Family",
         "Overexpression (log2FC of its own gene)", "DEGs (padj < 0.05)", "Up-regulated", "Down-regulated"),
       c(tf, tf_id, family,
-        if (is.na(activity) || activity == "") "-" else activity,
         if (nrow(own) == 0) "-" else format(round(own$log2FoldChange[1], 2)),
         nrow(degs), sum(degs$log2FoldChange > 0), sum(degs$log2FoldChange < 0))
     )
