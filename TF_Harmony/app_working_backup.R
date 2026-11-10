@@ -1564,11 +1564,19 @@ source("helpers.R", local = TRUE)
     tf <- req(input$singletf)
     sub <- pfms[intersect(paste0(tf, c("_down", "_up")), names(pfms))]
     validate(need(length(sub) >= 1, "No motifs for this TF."))
+    ## Draw both logos as stored, starting at position 1. motifStack() would align
+    ## them to each other (shifting one, often flipping it to its reverse complement),
+    ## which means nothing for two unrelated motifs. Blank columns on the right of
+    ## the shorter motif keep the letter widths equal.
+    len <- max(vapply(sub, function(m) ncol(m@mat), 1L))
+    sub <- lapply(sub, function(m) {
+      n <- len - ncol(m@mat)
+      if (n > 0) addBlank(m, as.numeric(n), TRUE) else m
+    })
     outfile <- tempfile(fileext = ".svg")
     ok <- tryCatch({
       svg(outfile, width = 8, height = 2 * length(sub) + 0.1)
-      grid::grid.newpage()
-      motifStack(sub, layout = "stack")
+      plotMotifLogoStack(sub)
       dev.off()
       TRUE
     }, error = function(e) {
