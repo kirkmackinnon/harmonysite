@@ -398,7 +398,7 @@ ui <- navbarPage("Landscape of TF Harmony",
   ),
 
   ## Fourth panel - Single TF
-  ## Overview of one TF: family, activity, overexpression level, DEG counts, de novo motifs,
+  ## Overview of one TF: family, overexpression level, DEG counts, motifs,
   ## and every TF it shares harmony with
   tabPanel("Single TF",
     inputPanel(
@@ -410,7 +410,7 @@ ui <- navbarPage("Landscape of TF Harmony",
         tableOutput("singletfSummary")
       ),
       column(8,
-        h4("De novo motifs"),
+        h4("Motifs"),
         imageOutput("singletfMotifs", height = "auto") %>% withSpinner()
       )
     ),

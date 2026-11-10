@@ -1558,12 +1558,12 @@ source("helpers.R", local = TRUE)
     )
   }, colnames = FALSE, striped = TRUE)
 
-  ## De novo motif logos: the TF's up and down motifs, stacked (the stack draws the first motif
+  ## Motif logos: the TF's up and down motifs, stacked (the stack draws the first motif
   ## at the bottom, so down goes first to put up on top)
   output$singletfMotifs <- renderImage({
     tf <- req(input$singletf)
     sub <- pfms[intersect(paste0(tf, c("_down", "_up")), names(pfms))]
-    validate(need(length(sub) >= 1, "No de novo motifs for this TF."))
+    validate(need(length(sub) >= 1, "No motifs for this TF."))
     outfile <- tempfile(fileext = ".svg")
     ok <- tryCatch({
       svg(outfile, width = 8, height = 2 * length(sub) + 0.1)
@@ -1578,7 +1578,7 @@ source("helpers.R", local = TRUE)
     })
     validate(need(ok && file.exists(outfile) && file.info(outfile)$size > 500, "Motif logos failed to render."))
     list(src = outfile, contentType = "image/svg+xml", width = "100%", height = "auto",
-         alt = paste(tf, "de novo motifs"))
+         alt = paste(tf, "motifs"))
   }, deleteFile = TRUE)
 
   ## Every TF this one shares harmony with, from this TF's side (TF -> partner)
